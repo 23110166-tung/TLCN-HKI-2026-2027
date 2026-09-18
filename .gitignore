@@ -1,0 +1,67 @@
+# =============================================
+# HCMUTE DocAI - .gitignore
+# =============================================
+
+# ---- Datasets (quá nặng, lưu trên Kaggle) ----
+dataset_yolo/
+dataset_yolo_real_world/
+dataset_yolo_transcripts/
+dataset_anh_chup_thuc_te/
+print_dataset_100/
+blank_pdf/
+
+# ---- Model weights ----
+*.pt
+*.pth
+*.onnx
+*.engine
+HCMUTE_DocAI_YOLOv11_VietOCR_Artifacts/
+
+# ---- Generated images / visualizations ----
+*.png
+*.jpg
+*.jpeg
+*.webp
+real_test_vis.png
+syn_test_vis.png
+
+# ---- Temp / build ----
+__pycache__/
+*.pyc
+*.pyo
+.temp/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ---- PDF exports (report files) ----
+*.pdf
+
+# ---- Virtual environments ----
+venv/
+.venv/
+env/
+
+# ---- IDE & OS ----
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Jupyter checkpoints ----
+.ipynb_checkpoints/
+
+# ---- Secrets / credentials ----
+.env
+*.key
+kaggle.json
+
+# ---- MS Office temp files ----
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# ---- Windows specific ----
+$RECYCLE.BIN/
