@@ -55,9 +55,26 @@ def build_notebook(output_path="train_vietocr_finetune_kaggle.ipynb"):
 2. Nhấn nút **Run All** hoặc chạy tuần tự từng cell.""")
 
     # CELL 2: Install dependencies
-    add_code("""# 1. Cài đặt các thư viện cần thiết cho VietOCR & Đánh giá định lượng
-%pip install -q --upgrade pip
-%pip install -q vietocr editdistance tabulate matplotlib pandas opencv-python pillow pymupdf""")
+    add_code("""# 1. Cài đặt thư viện (KHÔNG kéo pillow==10.2.0/imgaug/numpy cũ của vietocr -> tránh lỗi build trên Kaggle)
+%pip install -q --no-deps vietocr
+%pip install -q einops gdown prefetch-generator lmdb albumentations editdistance tabulate pymupdf
+
+# vietocr import `imgaug` ở đầu module nhưng Trainer mặc định chỉ dùng albumentations (ImgAugTransformV2).
+# imgaug 0.4.0 lỗi với numpy>=2 -> nếu không import được thì tạo stub rỗng.
+import sys, types
+try:
+    import imgaug
+except Exception:
+    ia = types.ModuleType("imgaug"); ia.__path__ = []; ia.ALL = "all"
+    iaa = types.ModuleType("imgaug.augmenters")
+    ia.augmenters = iaa
+    sys.modules["imgaug"] = ia
+    sys.modules["imgaug.augmenters"] = iaa
+    print("⚠️ imgaug không khả dụng -> dùng stub (không ảnh hưởng huấn luyện)")
+
+from vietocr.tool.config import Cfg
+print("✅ Cài đặt & import vietocr thành công")""")
+
 
     # CELL 3: GPU check
     add_code("""# 2. Kiểm tra tài nguyên phần cứng GPU trên Kaggle
