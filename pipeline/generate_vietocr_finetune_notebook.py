@@ -292,13 +292,15 @@ test_ann_path = os.path.join(DATA_ROOT, "test_annotation.txt")
 print(f"🚀 Bắt đầu đánh giá Baseline trên tập Test ({test_ann_path})...")
 baseline_metrics, baseline_samples = evaluate_on_test_set(baseline_predictor, test_ann_path, DATA_ROOT)
 
-print("\n" + "=" * 60)
+print()
+print("=" * 60)
 print("📊 KẾT QUẢ ĐO LƯỜNG BASELINE PRETRAINED VIETOCR:")
 print(f"   - Exact Match : {baseline_metrics['exact_match']}% ({baseline_metrics['exact_count']}/{baseline_metrics['total']})")
 print(f"   - CER         : {baseline_metrics['cer']}%")
 print(f"   - WER         : {baseline_metrics['wer']}%")
 print(f"   - Tốc độ      : {baseline_metrics['speed_fps']} mẫu/giây")
 print("=" * 60)""")
+
 
     # CELL 9: Fine-tuning config markdown
     add_md("""---
@@ -358,7 +360,8 @@ print(f"   - Export Wts : {config['trainer']['export']}")""")
 print("⏳ Khởi tạo VietOCR Trainer với pretrained=True...")
 trainer = Trainer(config, pretrained=True)
 
-print("\n" + "=" * 70)
+print()
+print("=" * 70)
 print("🔥 BẮT ĐẦU QUÁ TRÌNH HUẤN LUYỆN (VUI LÒNG ĐỢI)...")
 print("=" * 70)
 
@@ -366,7 +369,8 @@ start_time = time.time()
 trainer.train()
 total_train_time = time.time() - start_time
 
-print("\n" + "=" * 70)
+print()
+print("=" * 70)
 print(f"🎉 HUẤN LUYỆN HOÀN TẤT TRONG {total_train_time / 60:.1f} PHÚT!")
 print(f"💾 Trọng số tốt nhất đã được xuất ra: {config['trainer']['export']}")
 print("=" * 70)""")
@@ -389,13 +393,15 @@ finetuned_predictor = Predictor(ft_cfg)
 print(f"🚀 Bắt đầu đánh giá Fine-tuned trên tập Test ({test_ann_path})...")
 finetuned_metrics, finetuned_samples = evaluate_on_test_set(finetuned_predictor, test_ann_path, DATA_ROOT)
 
-print("\n" + "=" * 60)
+print()
+print("=" * 60)
 print("📊 KẾT QUẢ ĐO LƯỜNG SAU FINE-TUNING:")
 print(f"   - Exact Match : {finetuned_metrics['exact_match']}% ({finetuned_metrics['exact_count']}/{finetuned_metrics['total']})")
 print(f"   - CER         : {finetuned_metrics['cer']}%")
 print(f"   - WER         : {finetuned_metrics['wer']}%")
 print(f"   - Tốc độ      : {finetuned_metrics['speed_fps']} mẫu/giây")
 print("=" * 60)""")
+
 
     # CELL 14: Academic Comparison & Charts markdown
     add_md("""---
