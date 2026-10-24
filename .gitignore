@@ -9,6 +9,7 @@ dataset_yolo_transcripts/
 dataset_anh_chup_thuc_te/
 print_dataset_100/
 blank_pdf/
+dataset_ocr/
 
 # ---- Model weights ----
 *.pt
@@ -26,6 +27,7 @@ real_test_vis.png
 syn_test_vis.png
 
 # ---- Temp / build ----
+*.zip
 __pycache__/
 *.pyc
 *.pyo

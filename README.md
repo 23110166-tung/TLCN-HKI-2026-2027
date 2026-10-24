@@ -60,14 +60,16 @@ TLCN/
 ├── pipeline/                   # Source code chính
 │   ├── mock_data.py            # Sinh dữ liệu sinh viên ngẫu nhiên (Synthetic)
 │   ├── ontology.py             # Định nghĩa 18 lớp học vụ HCMUTE
-│   ├── generate_dataset_*.py   # Sinh dataset 10 loại biểu mẫu
-│   ├── scan_simulator.py       # Mô phỏng hiệu ứng scan thực tế
+│   ├── generate_crop_ocr_dataset.py    # Trích xuất 15.507 crop OCR và nhãn chuẩn VietOCR
+│   ├── train_vietocr_finetune.py       # Script fine-tuning VietOCR & đo CER/WER
+│   ├── generate_vietocr_finetune_notebook.py  # Script sinh notebook Kaggle VietOCR
 │   ├── process_real_camera_dataset.py  # Perspective Dewarping + gán nhãn ảnh thực
 │   ├── inference_engine.py     # Pipeline YOLOv11 + VietOCR end-to-end
 │   ├── pdf_converter.py        # Chuyển đổi DOCX → PDF
 │   └── ...
 ├── sample/                     # File mẫu DOCX biểu mẫu gốc (10 loại)
-├── train_yolov11_vietocr_kaggle.ipynb  # Notebook huấn luyện trên Kaggle
+├── train_yolov11_vietocr_kaggle.ipynb     # Notebook YOLOv11 Layout Detection trên Kaggle
+├── train_vietocr_finetune_kaggle.ipynb    # Notebook Fine-tuning VietOCR trên Kaggle GPU
 ├── Bao_Cao_Tien_Do_*.docx      # Báo cáo tiến độ các giai đoạn
 └── .gitignore
 ```
