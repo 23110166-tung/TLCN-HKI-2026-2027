@@ -39,11 +39,20 @@ from pipeline.ontology import CLASS_NAMES, CLASS_MAP, CLASS_COLORS
 from pipeline.rule_engine import AcademicRuleEngine, format_report
 
 # Trọng số mặc định (tải về từ Kaggle – không commit lên GitHub do > 100MB)
-DEFAULT_YOLO_WEIGHTS = os.path.join(
+DOMAIN_ADAPTED_YOLO_WEIGHTS = os.path.join(
+    BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts", "yolo11_domain_adapted_best.pt"
+)
+SYNTHETIC_YOLO_WEIGHTS = os.path.join(
     BASE_DIR, "HCMUTE_DocAI_YOLOv11_VietOCR_Artifacts", "runs", "detect",
-    "hcmute_yolo11_layout", "weights", "best.pt")
+    "hcmute_yolo11_layout", "weights", "best.pt"
+)
+DEFAULT_YOLO_WEIGHTS = (
+    DOMAIN_ADAPTED_YOLO_WEIGHTS if os.path.exists(DOMAIN_ADAPTED_YOLO_WEIGHTS)
+    else SYNTHETIC_YOLO_WEIGHTS
+)
 DEFAULT_OCR_WEIGHTS = os.path.join(
-    BASE_DIR, "HCMUTE_VietOCR_Finetuned_Artifacts", "vietocr_hcmute_finetuned.pth")
+    BASE_DIR, "HCMUTE_VietOCR_Finetuned_Artifacts", "vietocr_hcmute_finetuned.pth"
+)
 
 ENTITY_CLASSES = ["student_name", "student_id", "class_name", "faculty", "major", "dob", "pob",
                   "phone", "email", "date", "reason", "degree_info"]
