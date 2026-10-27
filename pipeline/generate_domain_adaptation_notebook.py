@@ -77,9 +77,9 @@ if cuda_ok:
 else:
     print("⚠️ CẢNH BÁO: Đang chạy trên CPU! Vui lòng bật GPU T4 x2 trong Settings -> Accelerator.")
 
-# Cài đặt Ultralytics và các thư viện cần thiết
+# Cài đặt Ultralytics và tabulate (không dùng --upgrade để tránh xung đột môi trường Kaggle)
 import subprocess
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "ultralytics", "albumentations", "tabulate", "pandas", "matplotlib", "seaborn"])
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "tabulate"])
 
 from ultralytics import YOLO
 import pandas as pd
@@ -125,17 +125,25 @@ else:
         output_dir=DATASET_ROOT
     )
 
-# Chuẩn hóa file data.yaml trên Kaggle
-data_yaml_path = os.path.join(DATASET_ROOT, "data.yaml")
-if os.path.exists(data_yaml_path):
-    with open(data_yaml_path, 'r', encoding='utf-8') as f:
+# Lưu file cấu hình data_kaggle.yaml vào /kaggle/working (đảm bảo quyền ghi trên Kaggle)
+src_yaml = os.path.join(DATASET_ROOT, "data.yaml")
+if os.path.exists(src_yaml):
+    with open(src_yaml, 'r', encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
-    cfg['path'] = DATASET_ROOT
-    cfg['train'] = "images/train"
-    cfg['val'] = "images/val"
-    cfg['test'] = "images/test"
-    with open(data_yaml_path, 'w', encoding='utf-8') as f:
-        yaml.safe_dump(cfg, f)
+else:
+    cfg = {
+        'nc': 18,
+        'names': ['student_name', 'student_id', 'class_name', 'faculty', 'major', 'dob', 'pob', 'phone', 'email', 'course_code', 'course_name', 'credits', 'score', 'date', 'reason', 'degree_info', 'signature', 'stamp']
+    }
+
+cfg['path'] = DATASET_ROOT
+cfg['train'] = "images/train"
+cfg['val'] = "images/val"
+cfg['test'] = "images/test"
+
+data_yaml_path = "/kaggle/working/data_kaggle.yaml"
+with open(data_yaml_path, 'w', encoding='utf-8') as f:
+    yaml.safe_dump(cfg, f, sort_keys=False)
 
 print(f"⚙️ File cấu hình data.yaml tại: {data_yaml_path}")
 train_imgs = glob.glob(os.path.join(DATASET_ROOT, "images", "train", "*.*"))
