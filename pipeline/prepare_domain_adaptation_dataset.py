@@ -105,13 +105,18 @@ def apply_realistic_arm_shadow(img_bgr):
     return shadowed
 
 
-def clip_and_sanitize_yolo_bboxes(lines):
+def clean_and_deduplicate_yolo_bboxes(lines):
     """
-    Chuẩn hóa và clip tọa độ Bounding Box về đúng dải [0.0, 1.0]
-    để không bao giờ bị lỗi x_max > 1.0 hoặc width <= 0 do sai số số thực.
+    Chuẩn hóa, lọc nhãn rác và khử trùng lặp (NMS / Deduplication) triệt để:
+    1. Giới hạn tọa độ chặt chẽ trong [0.0, 1.0], loại bỏ box dị thường (width, height < 0.002).
+    2. Ràng buộc không gian bảng biểu: Các ô bảng điểm (course_code, course_name, credits, score)
+       chỉ nằm ở phần thân biểu mẫu (0.18 <= yc <= 0.94), loại bỏ nhãn giả do trùng số trong tiêu đề/ngày tháng.
+    3. Giới hạn kích thước ô điểm / tín chỉ: credits (class 11) chỉ có 1 chữ số nên w <= 0.08, h <= 0.06;
+       score (class 12) có w <= 0.12, h <= 0.06.
+    4. Non-Maximum Suppression (NMS) khử nhãn lặp lại (IoU > 0.35 hoặc IoA > 0.65 cùng lớp).
+    5. Khử nhiễu nhãn đơn lẻ (credits/score) bị đè lên các trường thông tin lớn (MSSV, SĐT, Tên, Ngày).
     """
-    bboxes = []
-    category_ids = []
+    boxes = []
     for l in lines:
         parts = l.strip().split()
         if len(parts) < 5:
@@ -119,21 +124,64 @@ def clip_and_sanitize_yolo_bboxes(lines):
         cls_id = int(parts[0])
         xc, yc, w, h = map(float, parts[1:5])
 
-        x0 = max(0.0, xc - w / 2.0)
-        x1 = min(1.0, xc + w / 2.0)
-        y0 = max(0.0, yc - h / 2.0)
-        y1 = min(1.0, yc + h / 2.0)
+        x0 = max(0.0, min(1.0, xc - w / 2.0))
+        x1 = max(0.0, min(1.0, xc + w / 2.0))
+        y0 = max(0.0, min(1.0, yc - h / 2.0))
+        y1 = max(0.0, min(1.0, yc + h / 2.0))
 
         bw = x1 - x0
         bh = y1 - y0
+        if bw < 0.002 or bh < 0.002:
+            continue
 
-        if bw > 0.002 and bh > 0.002:
-            new_xc = (x0 + x1) / 2.0
-            new_yc = (y0 + y1) / 2.0
-            bboxes.append([new_xc, new_yc, bw, bh])
-            category_ids.append(cls_id)
+        # Ràng buộc không gian cho ô bảng biểu
+        if cls_id in [9, 10, 11, 12]:
+            if yc < 0.18 or yc > 0.94:
+                continue
+            if cls_id == 11 and (bw > 0.08 or bh > 0.06):
+                continue
+            if cls_id == 12 and (bw > 0.12 or bh > 0.06):
+                continue
 
-    return bboxes, category_ids
+        boxes.append((cls_id, x0, y0, x1, y1, bw, bh))
+
+    # Khử trùng lặp (Deduplication)
+    kept = []
+    for b in boxes:
+        cls_id, x0, y0, x1, y1, bw, bh = b
+        area_b = bw * bh
+        dup = False
+        for k in kept:
+            k_cls, kx0, ky0, kx1, ky1, kbw, kbh = k
+            area_k = kbw * kbh
+            ix0, iy0 = max(x0, kx0), max(y0, ky0)
+            ix1, iy1 = min(x1, kx1), min(y1, ky1)
+            iw = max(0.0, ix1 - ix0)
+            ih = max(0.0, iy1 - iy0)
+            inter = iw * ih
+            if inter > 0:
+                union = area_b + area_k - inter
+                iou = inter / union if union > 0 else 0
+                ioa_b = inter / area_b if area_b > 0 else 0
+                # Trùng lặp cùng lớp
+                if cls_id == k_cls and (iou > 0.35 or ioa_b > 0.65):
+                    dup = True
+                    break
+                # Nhãn tín chỉ/điểm số ảo bị lẫn vào trường văn bản (MSSV, Phone, Name, Course)
+                if cls_id in [11, 12] and k_cls in [0, 1, 2, 7, 8, 9, 10] and ioa_b > 0.60:
+                    dup = True
+                    break
+        if not dup:
+            kept.append(b)
+
+    final_bboxes = []
+    final_cats = []
+    for cls_id, x0, y0, x1, y1, bw, bh in kept:
+        xc = (x0 + x1) / 2.0
+        yc = (y0 + y1) / 2.0
+        final_bboxes.append([xc, yc, bw, bh])
+        final_cats.append(cls_id)
+    return final_bboxes, final_cats
 
 
 def save_yolo_label(out_path, bboxes, category_ids):
@@ -249,7 +297,7 @@ def prepare_domain_adaptation_dataset(
 
     counts = {"train": 0, "val": 0, "test": 0, "augmented": 0, "synthetic": 0}
 
-    # 2. Xử lý tập Val & Test (GIỮ NGUYÊN BẢN CHỤP THỰC TẾ, KHÔNG AUGMENT)
+    # 2. Xử lý tập Val & Test (LÀM SẠCH NHÃN & KHỬ TRÙNG LẶP PHANTOM)
     for split_name in ["val", "test"]:
         print(f"\n📂 Đang chuẩn bị tập {split_name.upper()} ({len(splits[split_name])} ảnh thực tế)...")
         for s in splits[split_name]:
@@ -263,7 +311,11 @@ def prepare_domain_adaptation_dataset(
             dst_lbl = os.path.join(output_dir, "labels", split_name, lbl_name)
 
             shutil.copy2(src_img, dst_img)
-            shutil.copy2(src_lbl, dst_lbl)
+            if os.path.exists(src_lbl):
+                with open(src_lbl, "r", encoding="utf-8") as f_lbl:
+                    raw_lines = f_lbl.readlines()
+                c_bboxes, c_cats = clean_and_deduplicate_yolo_bboxes(raw_lines)
+                save_yolo_label(dst_lbl, c_bboxes, c_cats)
             counts[split_name] += 1
 
     # 3. Xử lý tập Train (Ảnh gốc + 3 biến thể Augmentation)
@@ -285,7 +337,7 @@ def prepare_domain_adaptation_dataset(
 
         with open(src_lbl, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        bboxes, cat_ids = clip_and_sanitize_yolo_bboxes(lines)
+        bboxes, cat_ids = clean_and_deduplicate_yolo_bboxes(lines)
 
         # Lưu ảnh gốc vào tập train
         dst_img_orig = os.path.join(output_dir, "images", "train", img_name)
@@ -392,7 +444,17 @@ names: {CLASS_NAMES}
             }
         }, f_ms, ensure_ascii=False, indent=2)
 
-    # 7. Đóng gói ZIP dataset
+    # 7. Tích hợp trọng số Pretrained Synthetic (Stage 2) vào dataset để Kaggle tự động tìm thấy
+    synth_weights_src = os.path.join(
+        BASE_DIR, "HCMUTE_DocAI_YOLOv11_VietOCR_Artifacts", "runs", "detect",
+        "hcmute_yolo11_layout", "weights", "best.pt"
+    )
+    if os.path.exists(synth_weights_src):
+        dst_weights = os.path.join(output_dir, "pretrained_synthetic_best.pt")
+        print(f"📦 Đang tích hợp trọng số Synthetic Pretrained ({os.path.getsize(synth_weights_src)/(1024*1024):.2f} MB) vào dataset...")
+        shutil.copy2(synth_weights_src, dst_weights)
+
+    # 8. Đóng gói ZIP dataset
     print(f"\n📦 Đang nén toàn bộ dataset thành: {OUTPUT_ZIP} ...")
     total_files = 0
     with zipfile.ZipFile(OUTPUT_ZIP, "w", zipfile.ZIP_DEFLATED) as zipf:

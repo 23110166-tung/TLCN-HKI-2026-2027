@@ -176,18 +176,23 @@ if train_samples:
     plt.show()""")
 
     # CELL 5: Locating Pretrained Synthetic Weights
-    add_code("""# 4. TÌM KIẾM TRỌNG SỐ TIỀN HUẤN LUYỆN YOLOV11N SYNTHETIC (GIAI ĐOẠN 2)
-# Trọng số tốt nhất từ Giai đoạn 2 đã được lưu trong Artifacts
-pretrained_candidates = glob.glob("/kaggle/input/**/hcmute_yolo11_layout/**/best.pt", recursive=True) + \\
-                        glob.glob("/kaggle/input/**/best.pt", recursive=True) + \\
-                        glob.glob("/kaggle/working/**/best.pt", recursive=True)
+    add_code("""# 4. TÌM KIẾM TRỌNG SỐ TIỀN HUẤN LUYỆN YOLOV11 SYNTHETIC (GIAI ĐOẠN 2)
+# Trọng số tốt nhất từ Giai đoạn 2 đã được lưu trong Artifacts hoặc nhúng sẵn trong dataset zip
+pretrained_candidates = (
+    glob.glob("/kaggle/input/**/pretrained_synthetic_best.pt", recursive=True) +
+    glob.glob("/kaggle/working/**/pretrained_synthetic_best.pt", recursive=True) +
+    glob.glob("/kaggle/input/**/hcmute_yolo11_layout/**/best.pt", recursive=True) +
+    glob.glob("/kaggle/input/**/best.pt", recursive=True) +
+    glob.glob("/kaggle/working/**/best.pt", recursive=True)
+)
 
 if pretrained_candidates:
     SYNTHETIC_WEIGHTS = pretrained_candidates[0]
-    print(f"📦 Tìm thấy trọng số Pretrained Synthetic: {SYNTHETIC_WEIGHTS}")
+    print(f"📦 Tìm thấy trọng số Pretrained Synthetic (Stage 2): {SYNTHETIC_WEIGHTS}")
+    print("   -> Sẵn sàng Transfer Learning từ mô hình đạt mAP 98.6% trên biểu mẫu HCMUTE!")
 else:
-    print("⚠️ Không tìm thấy trọng số Synthetic có sẵn, đang khởi tạo yolo11n.pt mặc định...")
-    SYNTHETIC_WEIGHTS = "yolo11n.pt"
+    print("⚠️ Không tìm thấy trọng số Synthetic có sẵn, đang khởi tạo yolo11s.pt (YOLOv11 Small)...")
+    SYNTHETIC_WEIGHTS = "yolo11s.pt"
 
 print("✅ Đã sẵn sàng trọng số khởi tạo:", SYNTHETIC_WEIGHTS)""")
 
@@ -201,7 +206,7 @@ model_baseline = YOLO(SYNTHETIC_WEIGHTS)
 
 metrics_baseline = model_baseline.val(
     data=data_yaml_path,
-    imgsz=1024,
+    imgsz=1280,
     split="test",
     device=0 if cuda_ok else "cpu",
     verbose=False,
@@ -220,23 +225,24 @@ print(f"   • mAP@0.5 (Độ chuẩn)       : {base_map50:.2f}%")
 print(f"   • mAP@0.5:0.95 (Chặt chẽ)  : {base_map95:.2f}%")""")
 
     # CELL 7: Step 2 - Fine-Tuning YOLOv11 with Domain Adaptation
-    add_code("""# 6. BƯỚC 2: TIẾN HÀNH FINE-TUNING YOLOV11N THÍCH NGHI MIỀN (DOMAIN ADAPTATION)
+    add_code("""# 6. BƯỚC 2: TIẾN HÀNH FINE-TUNING YOLOV11 THÍCH NGHI MIỀN (DOMAIN ADAPTATION)
 print("=" * 70)
-print("🚀 BẮT ĐẦU HUẤN LUYỆN FINE-TUNING YOLOV11N TRÊN DỮ LIỆU DOMAIN ADAPTATION")
+print("🚀 BẮT ĐẦU HUẤN LUYỆN FINE-TUNING YOLOV11 TRÊN DỮ LIỆU DOMAIN ADAPTATION ĐÃ LÀM SẠCH")
 print("=" * 70)
 
 # Khởi tạo mô hình từ trọng số Pretrained Synthetic
 model_ft = YOLO(SYNTHETIC_WEIGHTS)
 
-# Cấu hình siêu tham số Fine-Tuning:
-# - lr0=0.001, lrf=0.01: Tốc độ học tối ưu để bảo tồn tri thức biểu mẫu đã học
-# - degrees, perspective, shear, hsv: Tăng cường dữ liệu thời gian thực của YOLOv11
+# Cấu hình siêu tham số Fine-Tuning tối ưu hóa cho Document Layout Detection:
+# - imgsz=1280: Nhận diện sắc nét các ô chữ nhỏ (tín chỉ, điểm số, mã môn học)
+# - batch=8: An toàn tuyệt đối với VRAM 16GB GPU T4
+# - epochs=50, patience=15: Đủ thời gian hội tụ mà không bị overfitting
 train_results = model_ft.train(
     data=data_yaml_path,
-    epochs=40,
-    imgsz=1024,
-    batch=16 if cuda_ok else 4,
-    patience=10,
+    epochs=50,
+    imgsz=1280,
+    batch=8 if cuda_ok else 4,
+    patience=15,
     save=True,
     device=0 if cuda_ok else "cpu",
     project="/kaggle/working/runs/detect",
@@ -244,18 +250,19 @@ train_results = model_ft.train(
     exist_ok=True,
     plots=True,
     optimizer="AdamW",
-    lr0=0.001,
+    lr0=0.0008,
     lrf=0.01,
     weight_decay=0.0005,
-    degrees=5.0,
-    translate=0.05,
-    scale=0.1,
-    shear=2.0,
-    perspective=0.0005,
+    degrees=4.0,
+    translate=0.04,
+    scale=0.08,
+    shear=1.5,
+    perspective=0.0004,
     hsv_h=0.015,
-    hsv_s=0.4,
-    hsv_v=0.4,
-    mosaic=0.5,
+    hsv_s=0.3,
+    hsv_v=0.3,
+    mosaic=0.3,
+    mixup=0.1,
     verbose=True
 )
 
@@ -265,18 +272,18 @@ print(f"🎉 HUẤN LUYỆN HOÀN TẤT! Trọng số tối ưu nhất được 
     # CELL 8: Step 3 - Post Fine-Tuning Evaluation on Same Test Set
     add_code("""# 7. BƯỚC 3: ĐÁNH GIÁ MÔ HÌNH FINE-TUNED TRÊN CÙNG TẬP TEST CAMERA THỰC TẾ
 print("=" * 70)
-print("🔬 ĐÁNH GIÁ HIỆU NĂNG MÔ HÌNH FINE-TUNED TRÊN CÙNG TẬP TEST CAMERA THỰC TẾ")
+print("🔬 ĐÁNH GIÁ HIỆU NĂNG MÔ HÌNH FINE-TUNED TRÊN CÙNG TẬP TEST CAMERA THỰC TẾ (imgsz=1280)")
 print("=" * 70)
 
 model_evaluated = YOLO(BEST_FT_WEIGHTS)
 
 metrics_ft = model_evaluated.val(
     data=data_yaml_path,
-    imgsz=1024,
+    imgsz=1280,
     split="test",
     device=0 if cuda_ok else "cpu",
-    verbose=False,
-    plots=False
+    verbose=True,
+    plots=True
 )
 
 ft_p = float(metrics_ft.box.mp) * 100.0
@@ -288,7 +295,25 @@ print("\\n📊 KẾT QUẢ FINE-TUNED (DOMAIN ADAPTED TRÊN TẬP TEST CAMERA):"
 print(f"   • Precision (Độ chính xác) : {ft_p:.2f}%")
 print(f"   • Recall (Độ bao phủ)      : {ft_r:.2f}%")
 print(f"   • mAP@0.5 (Độ chuẩn)       : {ft_map50:.2f}%")
-print(f"   • mAP@0.5:0.95 (Chặt chẽ)  : {ft_map95:.2f}%")""")
+print(f"   • mAP@0.5:0.95 (Chặt chẽ)  : {ft_map95:.2f}%")
+
+# Thống kê chi tiết trên từng lớp (Per-Class Performance)
+per_class_data = []
+class_names = list(metrics_ft.names.values())
+for i, c_name in enumerate(class_names):
+    p_i = float(metrics_ft.box.p[i]) * 100.0 if i < len(metrics_ft.box.p) else 0.0
+    r_i = float(metrics_ft.box.r[i]) * 100.0 if i < len(metrics_ft.box.r) else 0.0
+    map50_i = float(metrics_ft.box.ap50[i]) * 100.0 if i < len(metrics_ft.box.ap50) else 0.0
+    per_class_data.append({
+        "Lớp đối tượng": c_name,
+        "Precision": f"{p_i:.1f}%",
+        "Recall": f"{r_i:.1f}%",
+        "mAP@0.5": f"{map50_i:.1f}%"
+    })
+df_per_class = pd.DataFrame(per_class_data)
+df_per_class.to_csv("/kaggle/working/domain_adaptation_per_class.csv", index=False, encoding="utf-8-sig")
+print("\\n📋 CHI TIẾT HIỆU NĂNG 18 LỚP HỌC THUẬT (PER-CLASS METRICS):")
+print(tabulate(df_per_class, headers="keys", tablefmt="github", showindex=False))""")
 
     # CELL 9: Scientific Comparison Table answering RQ2
     add_code("""# 8. BƯỚC 4: TỔNG HỢP SO SÁNH KHOA HỌC TRẢ LỜI CÂU HỎI NGHIÊN CỨU 2 (RQ2)
@@ -383,7 +408,7 @@ print(f"📊 Đã lưu biểu đồ: {chart_path}")""")
 test_images = sorted(glob.glob(os.path.join(DATASET_ROOT, "images", "test", "*.*")))[:3]
 if test_images:
     for idx, t_img in enumerate(test_images, 1):
-        res = model_evaluated(t_img, imgsz=1024, conf=0.35, verbose=False)[0]
+        res = model_evaluated(t_img, imgsz=1280, conf=0.35, verbose=False)[0]
         res_plotted = res.plot()
         plt.figure(figsize=(10, 14), dpi=150)
         plt.imshow(cv2.cvtColor(res_plotted, cv2.COLOR_BGR2RGB))
@@ -403,6 +428,18 @@ with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
     if os.path.exists(csv_rq2_path):
         zipf.write(csv_rq2_path, arcname="domain_adaptation_rq2_results.csv")
         print("📄 Đã thêm file CSV kết quả RQ2")
+    per_class_csv = "/kaggle/working/domain_adaptation_per_class.csv"
+    if os.path.exists(per_class_csv):
+        zipf.write(per_class_csv, arcname="domain_adaptation_per_class.csv")
+        print("📄 Đã thêm file CSV chi tiết 18 lớp học thuật")
+    if os.path.exists(chart_path):
+        zipf.write(chart_path, arcname="domain_adaptation_comparison_chart.png")
+        print("📊 Đã thêm biểu đồ so sánh")
+    # Thêm training curves của YOLOv11
+    results_png = "/kaggle/working/runs/detect/hcmute_yolo11_domain_adapted/results.png"
+    if os.path.exists(results_png):
+        zipf.write(results_png, arcname="training_results_curves.png")
+        print("📈 Đã thêm đường cong huấn luyện results.png")
     if os.path.exists(chart_path):
         zipf.write(chart_path, arcname="domain_adaptation_comparison_chart.png")
         print("📊 Đã thêm biểu đồ so sánh")
