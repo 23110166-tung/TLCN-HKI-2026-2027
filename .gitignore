@@ -19,6 +19,7 @@ dataset_yolo_domain_adaptation/
 *.engine
 HCMUTE_DocAI_YOLOv11_VietOCR_Artifacts/
 HCMUTE_YOLOv11_Domain_Adaptation_Artifacts/
+HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2/
 
 # ---- Generated images / visualizations ----
 *.png
