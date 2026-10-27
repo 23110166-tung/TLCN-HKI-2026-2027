@@ -10,6 +10,7 @@ dataset_anh_chup_thuc_te/
 print_dataset_100/
 blank_pdf/
 dataset_ocr/
+dataset_yolo_domain_adaptation/
 
 # ---- Model weights ----
 *.pt
@@ -17,6 +18,7 @@ dataset_ocr/
 *.onnx
 *.engine
 HCMUTE_DocAI_YOLOv11_VietOCR_Artifacts/
+HCMUTE_YOLOv11_Domain_Adaptation_Artifacts/
 
 # ---- Generated images / visualizations ----
 *.png

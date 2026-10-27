@@ -1,7 +1,7 @@
 # HCMUTE DocAI – YOLOv11 Layout Detection & VietOCR
 
 > **Tiểu luận chuyên ngành AI** – Học kỳ 1, Năm học 2026-2027  
-> **Trường ĐH Công nghệ Kỹ thuật TP.HCM (HCMUTE)**
+> **Trường Đại học Công nghệ Kỹ thuật Thành phố Hồ Chí Minh**
 
 ## Đề tài
 

@@ -131,7 +131,7 @@ def main():
     r1 = p_l.add_run("BỘ GIÁO DỤC VÀ ĐÀO TẠO\n")
     r1.font.name = 'Times New Roman'
     r1.font.size = Pt(9.5)
-    r2 = p_l.add_run("TRƯỜNG ĐH CÔNG NGHỆ KỸ THUẬT TP.HCM\n")
+    r2 = p_l.add_run("TRƯỜNG ĐẠI HỌC CÔNG NGHỆ KỸ THUẬT TP.HCM\n")
     r2.font.name = 'Times New Roman'
     r2.font.size = Pt(9.5)
     r2.font.bold = True
@@ -222,8 +222,8 @@ def main():
     add_heading_1(doc, "I. TỔNG KẾT CÁC CÔNG VIỆC ĐÃ HOÀN THÀNH TRONG TUẦN")
     add_body_p(doc, "Thực hiện đúng kế hoạch đề ra và bám sát chỉ đạo của Giảng viên hướng dẫn về việc phân công nhiệm vụ, thu thập biểu mẫu chính thức từ nhà trường, xây dựng bộ dữ liệu có gán nhãn chuẩn hóa và bảo mật thông tin sinh viên theo Đề cương chi tiết, nhóm đã hoàn thành xuất sắc các hạng mục sau:")
 
-    add_heading_2(doc, "1. Thu thập & Chuẩn hóa 10 Biểu Mẫu Học Vụ Chính Thức của HCMUTE")
-    add_body_p(doc, "Nguồn dữ liệu: Nhóm đã liên hệ và tổng hợp đầy đủ các biểu mẫu quản lý đào tạo ISO hiện hành từ Cổng thông tin Phòng Đào tạo (pdt.hcmute.edu.vn), các Khoa chuyên môn và hệ thống trực tuyến của Trường ĐH Sư phạm Kỹ thuật TP.HCM.", bullet=True)
+    add_heading_2(doc, "1. Thu thập & Chuẩn hóa 10 Biểu Mẫu Học Vụ Chính Thức của Nhà Trường")
+    add_body_p(doc, "Nguồn dữ liệu: Nhóm đã liên hệ và tổng hợp đầy đủ các biểu mẫu quản lý đào tạo ISO hiện hành từ Cổng thông tin Phòng Đào tạo, các Khoa chuyên môn và hệ thống trực tuyến của Trường Đại học Công nghệ Kỹ thuật Thành phố Hồ Chí Minh.", bullet=True)
     add_body_p(doc, "Đã chuẩn hóa và số hóa 10 loại biểu mẫu trọng tâm phục vụ bài toán:", bullet=True)
 
     # 10 Templates table

@@ -30,6 +30,10 @@ def main():
     for k, v in res_syn["entities"].items():
         print(f"  {k}: {v}")
     print("Verification:", json.dumps(res_syn["verification"], ensure_ascii=False))
+    if "validation" in res_syn:
+        from pipeline.rule_engine import format_report
+        print("\n📋 KẾT QUẢ THẨM ĐỊNH NGHIỆP VỤ (RULE ENGINE):")
+        print(format_report(res_syn["validation"]))
 
     print("\n================== 2. REAL CAMERA TEST SAMPLE ==================")
     res_real = engine.process_document(test_real, save_visualization_path="real_test_vis.png")
@@ -39,6 +43,10 @@ def main():
     for k, v in res_real["entities"].items():
         print(f"  {k}: {v}")
     print("Verification:", json.dumps(res_real["verification"], ensure_ascii=False))
+    if "validation" in res_real:
+        from pipeline.rule_engine import format_report
+        print("\n📋 KẾT QUẢ THẨM ĐỊNH NGHIỆP VỤ (RULE ENGINE):")
+        print(format_report(res_real["validation"]))
 
 if __name__ == "__main__":
     main()

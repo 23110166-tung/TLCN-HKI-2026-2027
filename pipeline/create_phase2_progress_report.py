@@ -138,7 +138,7 @@ def main():
     cl = ht.rows[0].cells[0]; cl.width = Inches(3.8)
     pl = cl.paragraphs[0]; fmt(pl, sb=0, sa=0, align=WD_ALIGN_PARAGRAPH.CENTER)
     for txt, sz, bold in [("BỘ GIÁO DỤC VÀ ĐÀO TẠO\n", 9.5, False),
-                           ("TRƯỜNG ĐH CÔNG NGHỆ KỸ THUẬT TP.HCM\n", 9.5, True),
+                           ("TRƯỜNG ĐẠI HỌC CÔNG NGHỆ KỸ THUẬT TP.HCM\n", 9.5, True),
                            ("KHOA CÔNG NGHỆ THÔNG TIN\n", 9.5, True),
                            ("---o0o---", 8.5, False)]:
         r = pl.add_run(txt); r.font.name = 'Times New Roman'

@@ -34,7 +34,7 @@ def create_kaggle_notebook(output_path="train_yolov11_vietocr_kaggle.ipynb"):
         })
 
     # CELL 1: Header Markdown
-    add_md("""# 🎓 TIỂU LUẬN CHUYÊN NGÀNH AI - ĐẠI HỌC SƯ PHẠM KỸ THUẬT TP.HCM (HCMUTE)
+    add_md("""# 🎓 TIỂU LUẬN CHUYÊN NGÀNH AI - TRƯỜNG ĐẠI HỌC CÔNG NGHỆ KỸ THUẬT THÀNH PHỐ HỒ CHÍ MINH
 ## Đề tài: Xây dựng hệ thống nhận dạng, trích xuất và kiểm tra tính hợp lệ của thông tin từ đơn học vụ và bảng điểm sinh viên bằng học sâu
 - **Giảng viên hướng dẫn**: TS. Bùi Mạnh Quân
 - **Sinh viên thực hiện**:

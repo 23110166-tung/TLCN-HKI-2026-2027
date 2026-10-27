@@ -122,7 +122,7 @@ def main():
     r1 = p_l.add_run("BỘ GIÁO DỤC VÀ ĐÀO TẠO\n")
     r1.font.name = 'Times New Roman'
     r1.font.size = Pt(10)
-    r2 = p_l.add_run("TRƯỜNG ĐH CÔNG NGHỆ KỸ THUẬT TP.HCM\n")
+    r2 = p_l.add_run("TRƯỜNG ĐẠI HỌC CÔNG NGHỆ KỸ THUẬT TP.HCM\n")
     r2.font.name = 'Times New Roman'
     r2.font.size = Pt(10)
     r2.font.bold = True

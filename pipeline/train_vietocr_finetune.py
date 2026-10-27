@@ -253,7 +253,8 @@ def run_fine_tuning(config, eval_baseline=True):
     if os.path.exists(export_weights):
         eval_cfg = Cfg.load_config_from_name('vgg_transformer')
         eval_cfg['device'] = config['device']
-        eval_cfg['prediction_chk'] = export_weights
+        eval_cfg['weights'] = export_weights
+        eval_cfg['prediction_chk'] = None
         ft_predictor = Predictor(eval_cfg)
         finetuned_metrics, _ = evaluate_test_set(ft_predictor, data_root, test_ann)
 

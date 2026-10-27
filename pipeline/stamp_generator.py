@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 def create_circular_stamp(
-    outer_text="TRƯỜNG ĐẠI HỌC SƯ PHẠM KỸ THUẬT TP.HCM",
+    outer_text="TRƯỜNG ĐẠI HỌC CÔNG NGHỆ KỸ THUẬT TP.HCM",
     center_text="PHÒNG\nĐÀO TẠO",
     sub_text="★ TP. HỒ CHÍ MINH ★",
     size=(320, 320)

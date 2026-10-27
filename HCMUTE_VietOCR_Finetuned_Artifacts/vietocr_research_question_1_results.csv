@@ -1,0 +1,5 @@
+﻿Metric,Baseline,FineTuned,Delta
+Exact Match (%),51.67%,69.78%,+18.11%
+CER (%) [Càng thấp càng tốt],50.62%,42.98%,-7.64%
+WER (%) [Càng thấp càng tốt],47.46%,48.1%,+0.64%
+Số mẫu đúng tuyệt đối,448/867,605/867,+157
