@@ -440,14 +440,6 @@ with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
     if os.path.exists(results_png):
         zipf.write(results_png, arcname="training_results_curves.png")
         print("📈 Đã thêm đường cong huấn luyện results.png")
-    if os.path.exists(chart_path):
-        zipf.write(chart_path, arcname="domain_adaptation_comparison_chart.png")
-        print("📊 Đã thêm biểu đồ so sánh")
-    # Thêm training curves của YOLOv11
-    results_png = "/kaggle/working/runs/detect/hcmute_yolo11_domain_adapted/results.png"
-    if os.path.exists(results_png):
-        zipf.write(results_png, arcname="training_results_curves.png")
-        print("📈 Đã thêm đường cong huấn luyện results.png")
 
 zip_size_mb = os.path.getsize(output_zip) / (1024 * 1024)
 print("=" * 70)
