@@ -39,6 +39,9 @@ from pipeline.ontology import CLASS_NAMES, CLASS_MAP, CLASS_COLORS
 from pipeline.rule_engine import AcademicRuleEngine, format_report
 
 # Trọng số mặc định (tải về từ Kaggle – không commit lên GitHub do > 100MB)
+DOMAIN_ADAPTED_V2_YOLO_WEIGHTS = os.path.join(
+    BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2", "yolo11_domain_adapted_best.pt"
+)
 DOMAIN_ADAPTED_YOLO_WEIGHTS = os.path.join(
     BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts", "yolo11_domain_adapted_best.pt"
 )
@@ -46,13 +49,40 @@ SYNTHETIC_YOLO_WEIGHTS = os.path.join(
     BASE_DIR, "HCMUTE_DocAI_YOLOv11_VietOCR_Artifacts", "runs", "detect",
     "hcmute_yolo11_layout", "weights", "best.pt"
 )
-DEFAULT_YOLO_WEIGHTS = (
-    DOMAIN_ADAPTED_YOLO_WEIGHTS if os.path.exists(DOMAIN_ADAPTED_YOLO_WEIGHTS)
-    else SYNTHETIC_YOLO_WEIGHTS
-)
+if os.path.exists(DOMAIN_ADAPTED_V2_YOLO_WEIGHTS):
+    DEFAULT_YOLO_WEIGHTS = DOMAIN_ADAPTED_V2_YOLO_WEIGHTS
+elif os.path.exists(DOMAIN_ADAPTED_YOLO_WEIGHTS):
+    DEFAULT_YOLO_WEIGHTS = DOMAIN_ADAPTED_YOLO_WEIGHTS
+else:
+    DEFAULT_YOLO_WEIGHTS = SYNTHETIC_YOLO_WEIGHTS
 DEFAULT_OCR_WEIGHTS = os.path.join(
     BASE_DIR, "HCMUTE_VietOCR_Finetuned_Artifacts", "vietocr_hcmute_finetuned.pth"
 )
+
+# Cấu hình dự phòng offline cho VietOCR vgg_transformer (tránh lỗi khi không có mạng tới vocr.vn)
+DEFAULT_OFFLINE_VIETOCR_CONFIG = {
+    'vocab': 'aAàÀảẢãÃáÁạẠăĂằẰẳẲẵẴắẮặẶâÂầẦẩẨẫẪấẤậẬbBcCdDđĐeEèÈẻẺẽẼéÉẹẸêÊềỀểỂễỄếẾệỆfFgGhHiIìÌỉỈĩĨíÍịỊjJkKlLmMnNoOòÒỏỎõÕóÓọỌôÔồỒổỔỗỖốỐộỘơƠờỜởỞỡỠớỚợỢpPqQrRsStTuUùÙủỦũŨúÚụỤưƯừỪửỬữỮứỨựỰvVwWxXyYỳỲỷỶỹỸýÝỵỴzZ0123456789!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~ ',
+    'device': 'cpu',
+    'seq_modeling': 'transformer',
+    'transformer': {
+        'd_model': 256,
+        'nhead': 8,
+        'num_encoder_layers': 6,
+        'num_decoder_layers': 6,
+        'dim_feedforward': 2048,
+        'max_seq_length': 1024,
+        'pos_dropout': 0.1,
+        'trans_dropout': 0.1
+    },
+    'optimizer': {'max_lr': 0.0003, 'min_lr': 1e-05},
+    'trainer': {'batch_size': 32, 'print_every': 200, 'valid_every': 1000, 'iters': 20000, 'export': './weights/transformerocr.pth', 'checkpoint': './checkpoint/transformerocr.pth', 'log': './train.log', 'eval_batches': 500},
+    'dataset': {'name': 'data', 'data_root': './img/', 'train_annotation': 'train_line_annotation.txt', 'valid_annotation': 'val_line_annotation.txt', 'image_height': 32, 'image_min_width': 32, 'image_max_width': 512},
+    'dataloader': {'num_workers': 3, 'pin_memory': True},
+    'quiet': False,
+    'backbone': 'vgg19_bn',
+    'cnn': {'pretrained': False, 'ss': [[2, 2], [2, 2], [2, 1], [2, 1], [1, 1]], 'ks': [[2, 2], [2, 2], [2, 1], [2, 1], [1, 1]], 'hidden': 256},
+    'predictor': {'beamsearch': False}
+}
 
 ENTITY_CLASSES = ["student_name", "student_id", "class_name", "faculty", "major", "dob", "pob",
                   "phone", "email", "date", "reason", "degree_info"]
@@ -76,9 +106,11 @@ class DocumentLayoutAndOCR:
         device="cpu",
         conf_threshold=0.35,
         rule_engine=None,
+        imgsz=1280,
     ):
         self.device = device
         self.conf_threshold = conf_threshold
+        self.imgsz = imgsz
         self.yolo_model = None
         self.ocr_predictor = None
         self.ocr_engine_type = None
@@ -102,7 +134,12 @@ class DocumentLayoutAndOCR:
             from vietocr.tool.predictor import Predictor
             from vietocr.tool.config import Cfg
 
-            cfg = Cfg.load_config_from_name(ocr_model_name)
+            import copy
+            try:
+                cfg = Cfg.load_config_from_name(ocr_model_name)
+            except Exception as e_cfg:
+                print(f"ℹ️ Không kết nối được cấu hình online ({e_cfg}), chuyển sang dùng DEFAULT_OFFLINE_VIETOCR_CONFIG...")
+                cfg = Cfg(copy.deepcopy(DEFAULT_OFFLINE_VIETOCR_CONFIG))
             cfg['device'] = self.device
             cfg['predictor']['beamsearch'] = False
             if ocr_weights_path and os.path.exists(ocr_weights_path):
@@ -201,22 +238,30 @@ class DocumentLayoutAndOCR:
             table.append(entry)
         return table
 
-    def process_document(self, image_path, save_visualization_path=None, form_type=None, validate=True):
+    def process_document(self, image_input, save_visualization_path=None, form_type=None, validate=True):
         """
         Processes a full academic document page and extracts structured data.
         Returns a dictionary containing entities, course table, verification flags,
         raw detections and (optionally) the rule-engine validation report.
 
+        image_input: đường dẫn file ảnh (str) hoặc đối tượng PIL.Image.Image.
         form_type: mã loại biểu mẫu (vd 'T05_BAO_LUU') hoặc từ khóa; None = tự suy luận.
         """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Không tìm thấy file ảnh: {image_path}")
+        if isinstance(image_input, Image.Image):
+            img_pil = image_input.convert("RGB")
+            doc_name = getattr(image_input, "filename", "document.png")
+            pass_to_yolo = img_pil
+        else:
+            if not os.path.exists(str(image_input)):
+                raise FileNotFoundError(f"Không tìm thấy file ảnh: {image_input}")
+            img_pil = Image.open(image_input).convert("RGB")
+            doc_name = os.path.basename(str(image_input))
+            pass_to_yolo = str(image_input)
 
-        img_pil = Image.open(image_path).convert("RGB")
         w_img, h_img = img_pil.size
 
         structured_result = {
-            "document_file": os.path.basename(image_path),
+            "document_file": doc_name,
             "image_size": {"width": w_img, "height": h_img},
             "models": {"ocr_engine": self.ocr_engine_type, "ocr_weights": self.ocr_weights_used},
             "entities": {},
@@ -231,7 +276,7 @@ class DocumentLayoutAndOCR:
         }
 
         if self.yolo_model is not None:
-            self._run_detection_and_ocr(image_path, img_pil, structured_result)
+            self._run_detection_and_ocr(pass_to_yolo, img_pil, structured_result)
 
         # Rule Engine: kiểm tra tính hợp lệ nghiệp vụ
         if validate and self.rule_engine is not None:
@@ -242,9 +287,9 @@ class DocumentLayoutAndOCR:
 
         return structured_result
 
-    def _run_detection_and_ocr(self, image_path, img_pil, structured_result):
+    def _run_detection_and_ocr(self, yolo_input, img_pil, structured_result):
         w_img, h_img = img_pil.size
-        yolo_results = self.yolo_model(image_path, conf=self.conf_threshold, imgsz=1024, verbose=False)[0]
+        yolo_results = self.yolo_model(yolo_input, conf=self.conf_threshold, imgsz=self.imgsz, verbose=False)[0]
         boxes = yolo_results.boxes.xyxy.cpu().numpy()
         classes = yolo_results.boxes.cls.cpu().numpy().astype(int)
         confidences = yolo_results.boxes.conf.cpu().numpy()
@@ -308,7 +353,8 @@ class DocumentLayoutAndOCR:
 
         structured_result["courses_table"] = self._group_table_rows(table_records)
 
-    def _save_visualization(self, img_pil, structured_result, save_visualization_path):
+    def create_visualization(self, img_pil, structured_result, show_labels=True, show_banner=True):
+        """Tạo ảnh PIL trực quan hóa bounding boxes, nhãn trường và banner thẩm định."""
         vis_img = img_pil.copy()
         draw = ImageDraw.Draw(vis_img)
         try:
@@ -317,24 +363,31 @@ class DocumentLayoutAndOCR:
         except Exception:
             font = font_big = ImageFont.load_default()
 
-        for item in structured_result["raw_detections"]:
+        for item in structured_result.get("raw_detections", []):
             bx0, by0, bx1, by1 = item["box"]
             c_name = item["class_name"]
             txt = item["text"]
             color = CLASS_COLORS.get(CLASS_MAP.get(c_name, 0), (0, 120, 255))
             draw.rectangle([bx0, by0, bx1, by1], outline=color, width=3)
-            label_display = f"{c_name}: {txt[:18]}" if txt else c_name
-            draw.text((bx0, max(0, by0 - 18)), label_display, fill=color, font=font)
+            if show_labels:
+                conf = item.get("confidence", 0)
+                label_display = f"{c_name} ({conf:.2f}): {txt[:16]}" if txt else f"{c_name} ({conf:.2f})"
+                draw.text((bx0, max(0, by0 - 18)), label_display, fill=color, font=font)
 
         report = structured_result.get("validation")
-        if report:
-            color = STATUS_COLORS.get(report["status"], (0, 0, 0))
-            banner = (f"{report['status']} | {report['form_type']} | "
-                      f"Compliance {report['compliance_score']}% | "
-                      f"E:{report['summary']['errors']} W:{report['summary']['warnings']}")
-            draw.rectangle([0, 0, vis_img.size[0], 44], fill=color)
-            draw.text((12, 8), banner, fill=(255, 255, 255), font=font_big)
+        if report and show_banner:
+            color = STATUS_COLORS.get(report.get("status", "WARNING"), (0, 0, 0))
+            banner = (f"{report.get('status', '')} | {report.get('form_type', '')} | "
+                      f"Compliance: {report.get('compliance_score', 0)}% | "
+                      f"Lỗi: {report.get('summary', {}).get('errors', 0)} | "
+                      f"Cảnh báo: {report.get('summary', {}).get('warnings', 0)}")
+            draw.rectangle([0, 0, vis_img.size[0], 48], fill=color)
+            draw.text((12, 10), banner, fill=(255, 255, 255), font=font_big)
 
+        return vis_img
+
+    def _save_visualization(self, img_pil, structured_result, save_visualization_path):
+        vis_img = self.create_visualization(img_pil, structured_result)
         parent_dir = os.path.dirname(save_visualization_path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
