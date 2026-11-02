@@ -624,8 +624,16 @@ class DocumentLayoutAndOCR:
                 extracted_courses.append(row_record)
 
         if extracted_courses:
-            # Xóa các raw_detections bảng cũ của YOLO (bị phân mảnh, lệch cột) để thay thế bằng các bounding box chuẩn lưới
-            structured_result["raw_detections"] = [d for d in structured_result.get("raw_detections", []) if d.get("class_name") not in TABLE_CLASSES]
+            # Xóa các raw_detections bảng cũ của YOLO (bị phân mảnh, lệch cột) hoặc box text/date nằm lọt trong bảng
+            def is_inside_table(box):
+                bx0, by0, bx1, by1 = box
+                cx, cy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
+                return (tx - 5 <= cx <= tx + tw + 5) and (ty - 5 <= cy <= ty + th + 5)
+
+            structured_result["raw_detections"] = [
+                d for d in structured_result.get("raw_detections", [])
+                if d.get("class_name") not in TABLE_CLASSES and not (is_inside_table(d["box"]) and d.get("class_name") in ("date", "text"))
+            ]
             for row in extracted_courses:
                 r_box = row["row_box"]
                 ry0, ry1 = r_box[1], r_box[3]

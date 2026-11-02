@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import glob
+import importlib
 import pandas as pd
 from PIL import Image
 import streamlit as st
@@ -22,6 +23,9 @@ import streamlit as st
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
+import pipeline.inference_engine
+importlib.reload(pipeline.inference_engine)
 
 from pipeline.inference_engine import (
     DocumentLayoutAndOCR,
@@ -169,7 +173,7 @@ st.markdown(f"""
 # 2. KHỞI TẠO VÀ CACHE MÔ HÌNH HỌC SÂU (YOLOV11 + VIETOCR)
 # =====================================================================
 @st.cache_resource(show_spinner=False)
-def get_inference_engine(yolo_weight_path, conf_threshold, device):
+def get_inference_engine(yolo_weight_path, conf_threshold, device, engine_version="v2.2_table_grid_early_stop"):
     """Nạp mô hình 1 lần duy nhất vào bộ nhớ RAM/VRAM để tăng tốc suy luận."""
     engine = DocumentLayoutAndOCR(
         yolo_model_path=yolo_weight_path,
@@ -187,6 +191,14 @@ def get_inference_engine(yolo_weight_path, conf_threshold, device):
 # =====================================================================
 with st.sidebar:
     st.header("⚙️ Cấu hình Hệ thống")
+
+    if st.button("🔄 Tải lại mô hình & Xóa bộ nhớ đệm (Clear Cache)", use_container_width=True):
+        st.cache_resource.clear()
+        if "inference_result" in st.session_state:
+            del st.session_state["inference_result"]
+        if "last_processed_file" in st.session_state:
+            del st.session_state["last_processed_file"]
+        st.rerun()
 
     # 1. Chọn Trọng số YOLO
     yolo_options = {}
