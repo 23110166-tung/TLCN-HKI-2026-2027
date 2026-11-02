@@ -315,7 +315,7 @@ raw_detections = result.get("raw_detections", [])
 verification = result.get("verification", {})
 status = validation.get("status", "WARNING")
 form_type = validation.get("form_type", "UNKNOWN")
-form_name = validation.get("form_name", "Không xác định")
+form_name = validation.get("form_type_name", validation.get("form_name", "Không xác định"))
 compliance_score = validation.get("compliance_score", 0.0)
 summary = validation.get("summary", {})
 
@@ -375,7 +375,7 @@ with tab1:
     with t1_c2:
         toggle_banner = st.checkbox("Hiển thị thanh trạng thái thẩm định", value=True)
     with t1_c3:
-        st.caption(f"Loại biểu mẫu nhận diện: **{form_name} ({form_type})** | Nguồn: {validation.get('form_detected_source', 'N/A')}")
+        st.caption(f"Loại biểu mẫu nhận diện: **{form_name} ({form_type})** | Nguồn: {validation.get('form_type_source', 'N/A')}")
 
     # Tạo ảnh trực quan hóa
     annotated_img = engine.create_visualization(target_image_pil, result, show_labels=toggle_labels, show_banner=toggle_banner)
@@ -617,3 +617,4 @@ st.markdown(f"""
     GVHD: TS. Bùi Mạnh Quân | Nhóm tác giả: Nguyễn Bách Tùng (23110166) - Nguyễn Hưng Nguyên - Trần Cẩm Long
 </div>
 """, unsafe_allow_html=True)
+
