@@ -280,8 +280,9 @@ class DocumentLayoutAndOCR:
         if self.yolo_model is not None:
             self._run_detection_and_ocr(pass_to_yolo, img_pil, structured_result)
 
-        # 3. Fallback trích xuất cấu trúc bảng điểm nếu YOLO bị sót ô do downsampling
-        if len(structured_result.get("courses_table", [])) == 0 and cv2 is not None:
+        # 3. Trích xuất cấu trúc bảng điểm bằng Table Grid (OpenCV)
+        # Giúp khắc phục triệt để hiện tượng YOLO bị sót cột, hộp phân mảnh hoặc lệch tọa độ trên ảnh chụp camera
+        if cv2 is not None:
             self._extract_table_grid_fallback(img_pil, structured_result)
 
         # 4. Tự động nhận diện mã biểu mẫu từ OCR tiêu đề nếu chưa được chỉ định
@@ -362,6 +363,12 @@ class DocumentLayoutAndOCR:
                     rec_text = re.split(r"(?:Mã\s*SV|MSSV|SĐT|Điện thoại)", rec_text, flags=re.IGNORECASE)[0].strip()
                 elif cls_name == "student_id":
                     rec_text = re.sub(r"^(Mã\s*SV|MSSV|MSV)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                elif cls_name == "phone":
+                    rec_text = re.sub(r"^(Điện thoại|SĐT|Phone|Tel)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                elif cls_name == "class_name":
+                    rec_text = re.sub(r"^(Lớp|Class)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                elif cls_name == "faculty":
+                    rec_text = re.sub(r"^(Khoa|Khoa\s*\(TT\))\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
 
                 ents = structured_result["entities"]
                 if cls_name not in ents:
@@ -499,10 +506,11 @@ class DocumentLayoutAndOCR:
         sub_horiz = cv2.dilate(cv2.erode(table_crop_bw, h_k_sub), h_k_sub)
         row_proj = np.sum(sub_horiz > 0, axis=1)
         row_peaks = [i for i in range(1, len(row_proj)-1) if row_proj[i] > tw * 0.35 and row_proj[i] >= row_proj[i-1] and row_proj[i] >= row_proj[i+1]]
-        row_lines = []
+        cleaned_row_lines = []
         for p in row_peaks:
-            if not row_lines or p - row_lines[-1] > 18:
-                row_lines.append(p)
+            if not cleaned_row_lines or p - cleaned_row_lines[-1] >= 18:
+                cleaned_row_lines.append(p)
+        row_lines = cleaned_row_lines
 
         # 4. Phân tách các đường phân chia cột dọc (Vertical column lines)
         v_k_sub = cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(th / 15)))
@@ -514,72 +522,137 @@ class DocumentLayoutAndOCR:
             if not col_lines or p - col_lines[-1] > 20:
                 col_lines.append(p)
 
+        if tw - col_lines[-1] > 50:
+            col_lines.append(tw)
+
         if len(row_lines) < 2 or len(col_lines) < 3:
             return
 
-        start_row_idx = 1 if len(row_lines) <= 5 else 2
+        # Nhận diện mẫu biểu mẫu để ánh xạ cột chính xác theo nghiệp vụ từng form
+        detected_form = structured_result.get("validation", {}).get("form_type") or ""
+        if not detected_form or detected_form == "UNKNOWN":
+            detected_form = self._detect_form_type_from_header(img_pil, structured_result)
+
+        is_chuyen_diem = any(kw in detected_form for kw in ("CHUYEN_DIEM", "T02", "T03", "T04", "T07"))
+
+        if is_chuyen_diem:
+            # Đơn chuyển điểm: Cột 1 = Tên môn cũ, Cột 2 = Mã môn cũ, Cột 3 = Số TC, Cột 4 = Điểm
+            col_name_idx = 1
+            col_code_idx = 2
+            col_cred_idx = 3 if len(col_lines) > 4 else None
+            col_score_idx = 4 if len(col_lines) > 5 else None
+            start_row_idx = 1
+        else:
+            # Đơn điểm I và mẫu chuẩn: Cột 1 = Mã môn, Cột 2 = Tên môn, Cột áp chót = Điểm
+            col_code_idx = 1
+            col_name_idx = 2
+            col_cred_idx = None
+            col_score_idx = min(8, len(col_lines) - 2) if len(col_lines) > 5 else None
+            start_row_idx = 2 if len(row_lines) > 5 else 1
+
         extracted_courses = []
 
         for r_idx in range(start_row_idx, len(row_lines) - 1):
             ry0, ry1 = row_lines[r_idx], row_lines[r_idx + 1]
-            if ry1 - ry0 < 15:
+            if ry1 - ry0 < 18:
                 continue
 
-            c_test = img_pil.crop((tx + col_lines[1], ty + ry0, tx + col_lines[min(len(col_lines)-1, 3)], ty + ry1))
-            c_test_np = np.array(c_test)
-            if np.mean(c_test_np) > 250 or np.std(c_test_np) < 8:
+            # 1. Kiểm tra độ tương phản / nét mực trong lòng ô (cell interior)
+            # Dùng khoảng đệm an toàn (+6px, -6px) để loại trừ triệt để viền kẻ bảng
+            cx_s = col_lines[1] + 6
+            cx_e = col_lines[min(len(col_lines) - 1, 3)] - 6
+            cy_s = ry0 + 5
+            cy_e = ry1 - 5
+            if cx_e <= cx_s or cy_e <= cy_s:
                 continue
 
-            code_text, name_text, score_text = "", "", ""
-            # Cột 1: Mã môn
-            if len(col_lines) > 2:
-                crop_code = img_pil.crop((tx + col_lines[1] + 2, ty + ry0 + 2, tx + col_lines[2] - 2, ty + ry1 - 2))
+            c_test = img_pil.crop((tx + cx_s, ty + cy_s, tx + cx_e, ty + cy_e))
+            c_test_gray = cv2.cvtColor(np.array(c_test), cv2.COLOR_RGB2GRAY)
+            p5 = float(np.percentile(c_test_gray, 5))
+            p50 = float(np.median(c_test_gray))
+            contrast = p50 - p5
+            std_val = float(np.std(c_test_gray))
+            ink_ratio = float(np.mean(c_test_gray < 140) * 100)
+
+            # Dòng trống hoàn toàn (giấy trắng không có chữ viết/in):
+            # Các biểu mẫu học vụ luôn điền môn học liên tục từ trên xuống dưới
+            if contrast < 16.0 and std_val < 12.0 and ink_ratio < 0.8:
+                # Gặp dòng trống đầu tiên => Dừng hẳn trích xuất bảng, không tạo bounding box cho các dòng trống còn lại
+                break
+
+            code_text, name_text, score_text, cred_text = "", "", "", ""
+
+            # Trích xuất Mã môn
+            if col_code_idx is not None and col_code_idx + 1 < len(col_lines):
+                crop_code = img_pil.crop((tx + col_lines[col_code_idx] + 3, ty + ry0 + 3, tx + col_lines[col_code_idx + 1] - 3, ty + ry1 - 3))
                 code_text, _ = self._ocr_crop(crop_code)
                 code_text = re.sub(r"[^A-Za-z0-9]", "", code_text).upper()
 
-            # Cột 2: Tên môn
-            if len(col_lines) > 3:
-                crop_name = img_pil.crop((tx + col_lines[2] + 2, ty + ry0 + 2, tx + col_lines[3] - 2, ty + ry1 - 2))
+            # Trích xuất Tên môn
+            if col_name_idx is not None and col_name_idx + 1 < len(col_lines):
+                crop_name = img_pil.crop((tx + col_lines[col_name_idx] + 3, ty + ry0 + 3, tx + col_lines[col_name_idx + 1] - 3, ty + ry1 - 3))
                 name_text, _ = self._ocr_crop(crop_name)
 
-            # Cột Điểm
-            score_col_idx = min(8, len(col_lines) - 2)
-            if score_col_idx > 2:
-                crop_score = img_pil.crop((tx + col_lines[score_col_idx] + 2, ty + ry0 + 2, tx + col_lines[score_col_idx+1] - 2, ty + ry1 - 2))
+            # Trích xuất Số tín chỉ (nếu form có cột TC)
+            if col_cred_idx is not None and col_cred_idx + 1 < len(col_lines):
+                crop_cred = img_pil.crop((tx + col_lines[col_cred_idx] + 2, ty + ry0 + 3, tx + col_lines[col_cred_idx + 1] - 2, ty + ry1 - 3))
+                cred_raw, _ = self._ocr_crop(crop_cred)
+                m_cred = re.search(r"\d+", cred_raw)
+                cred_text = m_cred.group(0) if m_cred else cred_raw
+
+            # Trích xuất Điểm
+            if col_score_idx is not None and col_score_idx + 1 < len(col_lines):
+                crop_score = img_pil.crop((tx + col_lines[col_score_idx] + 2, ty + ry0 + 3, tx + col_lines[col_score_idx + 1] - 2, ty + ry1 - 3))
                 score_raw, _ = self._ocr_crop(crop_score)
                 m_score = re.search(r"\d+(?:[.,]\d+)?", score_raw)
                 score_text = m_score.group(0).replace(",", ".") if m_score else score_raw
 
-            # Chỉ ghi nhận dòng có nội dung môn học thực tế (tránh nạp các dòng trống trong mẫu in)
-            if (len(code_text) >= 4 or len(name_text) >= 4):
+            # Bỏ qua dòng tiêu đề nếu vô tình bị nhận diện
+            if "TÊN MÔN" in name_text.upper() or "MÃ MH" in code_text.upper():
+                continue
+
+            # Chỉ ghi nhận dòng có nội dung môn học thực tế
+            if len(code_text) >= 3 or len(name_text) >= 4:
                 row_record = {
                     "course_code": code_text,
                     "course_name": name_text,
                     "score": score_text,
                     "scores": [score_text] if score_text else [],
+                    "credits": cred_text,
                     "row_box": [tx, ty + ry0, tx + tw, ty + ry1]
                 }
                 extracted_courses.append(row_record)
-                if code_text:
-                    structured_result["raw_detections"].append({
-                        "class_name": "course_code", "confidence": 0.90,
-                        "box": [tx + col_lines[1], ty + ry0, tx + col_lines[2], ty + ry1],
-                        "text": code_text
-                    })
-                if name_text:
-                    structured_result["raw_detections"].append({
-                        "class_name": "course_name", "confidence": 0.90,
-                        "box": [tx + col_lines[2], ty + ry0, tx + col_lines[3], ty + ry1],
-                        "text": name_text
-                    })
-                if score_text:
-                    structured_result["raw_detections"].append({
-                        "class_name": "score", "confidence": 0.90,
-                        "box": [tx + col_lines[score_col_idx], ty + ry0, tx + col_lines[score_col_idx+1], ty + ry1],
-                        "text": score_text
-                    })
 
         if extracted_courses:
+            # Xóa các raw_detections bảng cũ của YOLO (bị phân mảnh, lệch cột) để thay thế bằng các bounding box chuẩn lưới
+            structured_result["raw_detections"] = [d for d in structured_result.get("raw_detections", []) if d.get("class_name") not in TABLE_CLASSES]
+            for row in extracted_courses:
+                r_box = row["row_box"]
+                ry0, ry1 = r_box[1], r_box[3]
+                if row.get("course_code") and col_code_idx is not None and col_code_idx + 1 < len(col_lines):
+                    structured_result["raw_detections"].append({
+                        "class_name": "course_code", "confidence": 0.90,
+                        "box": [tx + col_lines[col_code_idx], ry0, tx + col_lines[col_code_idx + 1], ry1],
+                        "text": row["course_code"]
+                    })
+                if row.get("course_name") and col_name_idx is not None and col_name_idx + 1 < len(col_lines):
+                    structured_result["raw_detections"].append({
+                        "class_name": "course_name", "confidence": 0.90,
+                        "box": [tx + col_lines[col_name_idx], ry0, tx + col_lines[col_name_idx + 1], ry1],
+                        "text": row["course_name"]
+                    })
+                if row.get("credits") and col_cred_idx is not None and col_cred_idx + 1 < len(col_lines):
+                    structured_result["raw_detections"].append({
+                        "class_name": "credits", "confidence": 0.90,
+                        "box": [tx + col_lines[col_cred_idx], ry0, tx + col_lines[col_cred_idx + 1], ry1],
+                        "text": row["credits"]
+                    })
+                if row.get("score") and col_score_idx is not None and col_score_idx + 1 < len(col_lines):
+                    structured_result["raw_detections"].append({
+                        "class_name": "score", "confidence": 0.90,
+                        "box": [tx + col_lines[col_score_idx], ry0, tx + col_lines[col_score_idx + 1], ry1],
+                        "text": row["score"]
+                    })
             structured_result["courses_table"] = extracted_courses
 
     def create_visualization(self, img_pil, structured_result, show_labels=True, show_banner=True):
@@ -587,21 +660,30 @@ class DocumentLayoutAndOCR:
         vis_img = img_pil.copy()
         draw = ImageDraw.Draw(vis_img)
         try:
-            font = ImageFont.truetype("arial.ttf", 16)
-            font_big = ImageFont.truetype("arialbd.ttf", 28)
+            font_small = ImageFont.truetype("arial.ttf", 13)
+            font_big = ImageFont.truetype("arialbd.ttf", 26)
         except Exception:
-            font = font_big = ImageFont.load_default()
+            font_small = font_big = ImageFont.load_default()
 
         for item in structured_result.get("raw_detections", []):
             bx0, by0, bx1, by1 = item["box"]
             c_name = item["class_name"]
-            txt = item["text"]
+            txt = item.get("text", "")
+            conf = item.get("confidence", 0)
             color = CLASS_COLORS.get(CLASS_MAP.get(c_name, 0), (0, 120, 255))
-            draw.rectangle([bx0, by0, bx1, by1], outline=color, width=3)
+            draw.rectangle([bx0, by0, bx1, by1], outline=color, width=2)
             if show_labels:
-                conf = item.get("confidence", 0)
-                label_display = f"{c_name} ({conf:.2f}): {txt[:16]}" if txt else f"{c_name} ({conf:.2f})"
-                draw.text((bx0, max(0, by0 - 18)), label_display, fill=color, font=font)
+                if c_name in TABLE_CLASSES:
+                    label_display = c_name
+                elif c_name in ("stamp", "signature"):
+                    label_display = f"{c_name} {conf:.2f}"
+                else:
+                    label_display = f"{c_name} {conf:.2f}"
+
+                tag_y = max(2, by0 - 15) if by0 >= 17 else by1 + 2
+                tag_w = len(label_display) * 7 + 6
+                draw.rectangle([bx0, tag_y, bx0 + tag_w, tag_y + 14], fill=color)
+                draw.text((bx0 + 3, tag_y), label_display, fill=(255, 255, 255), font=font_small)
 
         report = structured_result.get("validation")
         if report and show_banner:
