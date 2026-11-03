@@ -34,6 +34,9 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 SCHOOL_NAME = "Trường Đại học Công nghệ Kỹ thuật Thành phố Hồ Chí Minh"
+CANONICAL_SCHOOL_NAME = SCHOOL_NAME
+HISTORICAL_SCHOOL_NAME = "Trường Đại học Sư phạm Kỹ thuật Thành phố Hồ Chí Minh"
+TRANSITION_EFFECTIVE_DATE = date(2026, 1, 1)  # Mốc văn bản chuyển đổi chính thức tên gọi trường
 
 ERROR, WARNING, INFO = "ERROR", "WARNING", "INFO"
 STATUS_VALID, STATUS_WARNING, STATUS_INVALID = "VALID", "WARNING", "INVALID"
@@ -414,6 +417,7 @@ class AcademicRuleEngine:
             self._check_class_name,
             self._check_email,
             self._check_phone,
+            self._check_school_name,
             self._check_dob,
             self._check_document_dates,
             self._check_academic_period,
@@ -535,6 +539,78 @@ class AcademicRuleEngine:
         return [RuleResult("R1A", "Định dạng số điện thoại", WARNING, ok,
                            "SĐT di động hợp lệ (10 số)." if ok else "SĐT phải gồm 10 số, đầu 03/05/07/08/09.",
                            "phone", p)]
+
+    def _check_school_name(self, ctx):
+        """
+        R1B: Xác thực & Chuẩn hóa Tên cơ sở đào tạo (Historical School Name Normalization).
+        Theo nguyên tắc học thuật & chỉ đạo của GVHD:
+        - Lưu nguyên văn tên trường trích xuất từ hồ sơ (`raw_name`).
+        - Có trường dữ liệu chuẩn hóa về cùng một đơn vị đào tạo (`canonical_name`).
+        - Không tự động coi tên cũ là lỗi hoặc thay đổi nội dung gốc.
+        - Chấp nhận tên gọi lịch sử đối với hồ sơ lập trước mốc văn bản chuyển đổi (01/01/2026).
+        - Nếu sau mốc hoặc thiếu ngày -> chuyển sang kiểm tra thủ công.
+        """
+        raw = _first(ctx.entities.get("school_name"))
+        if not raw:
+            for d in ctx.detections:
+                t = str(d.get("text", "")).strip()
+                t_clean = _strip_accents(t).lower()
+                if ("su pham ky thuat" in t_clean or "cong nghe ky thuat" in t_clean or "spkt" in t_clean or "hcmute" in t_clean):
+                    raw = t
+                    break
+        if not raw:
+            return []
+
+        raw_clean = _strip_accents(raw).lower()
+        is_historical = any(k in raw_clean for k in ["su pham ky thuat", "spkt", "hcmute"])
+        is_current = any(k in raw_clean for k in ["cong nghe ky thuat", "cnkt", "hcmutec"])
+
+        canonical = CANONICAL_SCHOOL_NAME
+        out = []
+
+        # Đối chiếu niên đại văn bản
+        doc_date = None
+        for raw_d in _as_list(ctx.entities.get("date")):
+            parsed = parse_vn_date(raw_d)
+            if parsed:
+                doc_date = parsed
+                break
+
+        temporal_valid = True
+        if is_historical:
+            if doc_date:
+                if doc_date <= TRANSITION_EFFECTIVE_DATE:
+                    temporal_valid = True
+                    msg = (f"Tên trường trích xuất nguyên văn: '{raw}'. Đây là tên gọi lịch sử hợp lệ của trường "
+                           f"(hồ sơ lập ngày {doc_date.strftime('%d/%m/%Y')} trước mốc áp dụng văn bản mới {TRANSITION_EFFECTIVE_DATE.strftime('%d/%m/%Y')}). "
+                           f"Chuẩn hóa dữ liệu nội bộ: '{canonical}'.")
+                    out.append(RuleResult("R1B", "Tên cơ sở đào tạo hợp lệ", INFO, True, msg, "school_name", raw, canonical))
+                else:
+                    temporal_valid = False
+                    msg = (f"Tên trường trích xuất là tên lịch sử ('{raw}') nhưng ngày lập hồ sơ "
+                           f"({doc_date.strftime('%d/%m/%Y')}) sau thời điểm chuyển đổi ({TRANSITION_EFFECTIVE_DATE.strftime('%d/%m/%Y')}). "
+                           f"Cần cán bộ kiểm tra thủ công phôi biểu mẫu.")
+                    out.append(RuleResult("R1B", "Tên trường đào tạo theo niên đại", WARNING, False, msg, "school_name", raw, canonical))
+            else:
+                temporal_valid = None
+                msg = (f"Phát hiện tên trường lịch sử ('{raw}'). Chưa đủ thông tin ngày lập hồ sơ "
+                       f"để đối soát niên đại hiệu lực theo văn bản của trường -> chuyển sang kiểm tra thủ công.")
+                out.append(RuleResult("R1B", "Tên trường đào tạo cần kiểm tra thủ công", WARNING, False, msg, "school_name", raw, canonical))
+        elif is_current:
+            msg = f"Tên trường trích xuất nguyên văn: '{raw}'. Khớp với tên gọi chính thức hiện hành: '{canonical}'."
+            out.append(RuleResult("R1B", "Tên cơ sở đào tạo hợp lệ", INFO, True, msg, "school_name", raw, canonical))
+        else:
+            msg = f"Tên cơ sở đào tạo trên hồ sơ ('{raw}') không khớp với danh mục tên gọi chính thức hoặc lịch sử của trường."
+            out.append(RuleResult("R1B", "Tên trường không xác định", WARNING, False, msg, "school_name", raw, canonical))
+
+        ctx.normalized["school_info"] = {
+            "raw_name": raw,
+            "canonical_name": canonical,
+            "is_historical": is_historical,
+            "temporal_valid": temporal_valid,
+            "decision_reference": "Quy hoạch mạng lưới cơ sở GDĐH và Quyết định chuyển đổi tên trường"
+        }
+        return out
 
     # -----------------------------------------------------------------
     # R2x – Thời gian

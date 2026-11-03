@@ -200,11 +200,7 @@ class DocumentLayoutAndOCR:
             from vietocr.tool.config import Cfg
 
             import copy
-            try:
-                cfg = Cfg.load_config_from_name(ocr_model_name)
-            except Exception as e_cfg:
-                print(f"ℹ️ Không kết nối được cấu hình online ({e_cfg}), chuyển sang dùng DEFAULT_OFFLINE_VIETOCR_CONFIG...")
-                cfg = Cfg(copy.deepcopy(DEFAULT_OFFLINE_VIETOCR_CONFIG))
+            cfg = Cfg(copy.deepcopy(DEFAULT_OFFLINE_VIETOCR_CONFIG))
             cfg['device'] = self.device
             cfg['predictor']['beamsearch'] = False
             if ocr_weights_path and os.path.exists(ocr_weights_path):
@@ -624,6 +620,22 @@ class DocumentLayoutAndOCR:
         
         all_norm = unicodedata.normalize("NFD", all_text).lower()
         all_plain = "".join(c for c in all_norm if unicodedata.category(c) != "Mn").replace("đ", "d").replace("Đ", "D")
+
+        # Trích xuất nguyên văn tên cơ sở đào tạo từ header (Hỗ trợ xác thực tên lịch sử vs hiện hành)
+        school_raw = None
+        for l in extracted_lines:
+            l_plain = "".join(c for c in unicodedata.normalize("NFD", l).lower() if unicodedata.category(c) != "Mn")
+            if ("su pham ky thuat" in l_plain or "cong nghe ky thuat" in l_plain or "spkt" in l_plain):
+                school_raw = l.strip()
+                break
+        if not school_raw:
+            if "su pham ky thuat" in all_plain or "spkt" in all_plain:
+                school_raw = "TRƯỜNG ĐẠI HỌC SƯ PHẠM KỸ THUẬT TP. HỒ CHÍ MINH"
+            elif "cong nghe ky thuat" in all_plain:
+                school_raw = "TRƯỜNG ĐẠI HỌC CÔNG NGHỆ KỸ THUẬT THÀNH PHỐ HỒ CHÍ MINH"
+
+        if structured_result and school_raw:
+            structured_result["entities"]["school_name"] = school_raw
 
         if "diem i" in all_plain or "chua hoan tat" in all_plain or "diem 1" in all_plain or "nhan diem" in all_plain:
             return "T01_DIEM_I"
