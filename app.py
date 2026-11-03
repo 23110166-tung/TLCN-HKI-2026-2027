@@ -418,90 +418,250 @@ with tab1:
 # TAB 2: DỮ LIỆU CẤU TRÚC & OCR (VIETOCR)
 # ---------------------------------------------------------------------
 with tab2:
-    st.subheader("📋 Kết quả Trích xuất Dữ liệu Cấu trúc & OCR Tiếng Việt")
-
-    col_e1, col_e2 = st.columns([1, 1])
-
-    with col_e1:
-        st.markdown("#### 👤 Thông tin Định danh Sinh viên (Identity Fields)")
-        field_labels = {
-            "student_name": "Họ và tên sinh viên",
-            "student_id": "Mã số sinh viên (MSSV)",
-            "class_name": "Lớp sinh hoạt",
-            "faculty": "Khoa đào tạo",
-            "major": "Chuyên ngành",
-            "dob": "Ngày tháng năm sinh",
-            "pob": "Nơi sinh",
-            "phone": "Số điện thoại liên hệ",
-            "email": "Email sinh viên / trường",
-            "date": "Ngày lập đơn",
-            "reason": "Lý do làm đơn",
-            "degree_info": "Bậc đào tạo / Khóa học"
-        }
-
-        has_any_entity = False
-        for k, label in field_labels.items():
-            if k in entities:
-                has_any_entity = True
-                val = entities[k]
-                if isinstance(val, list):
-                    val_str = ", ".join(str(v) for v in val)
-                else:
-                    val_str = str(val)
-                st.markdown(f"""
-                <div class="entity-box">
-                    <span style="font-size: 12px; color: #6C7A89; font-weight: 600;">{label}</span><br>
-                    <strong style="font-size: 15px; color: #1B365D;">{val_str}</strong>
-                </div>
-                """, unsafe_allow_html=True)
-
-        if not has_any_entity:
-            st.info("Chưa phát hiện trường định danh rõ ràng từ ảnh này.")
-
-    with col_e2:
-        st.markdown("#### 🔏 Tính Toàn vẹn Hồ sơ (Pháp lý & Chữ ký)")
-        st.markdown(f"""
-        - **Mộc dấu đỏ (Stamp):** {"✅ Đã phát hiện (" + str(verification.get("stamp_count", 0)) + " mộc)" if verification.get("has_stamp") else "❌ Không có con dấu"}
-        - **Chữ ký (Signature):** {"✅ Đã phát hiện (" + str(verification.get("signature_count", 0)) + " chữ ký)" if verification.get("has_signature") else "❌ Không có chữ ký"}
-        - **Yêu cầu loại mẫu:** {validation.get("form_spec", {}).get("signers", "Theo quy chế chung")}
-        """)
-
-        st.markdown("#### 💾 Xuất Dữ liệu Cấu trúc")
-        json_str = json.dumps(result, ensure_ascii=False, indent=2, default=str)
-        st.download_button(
-            label="📥 Tải xuống Dữ liệu JSON (Full Extraction)",
-            data=json_str,
-            file_name=f"{os.path.splitext(target_file_label)[0]}_extracted.json",
-            mime="application/json",
-            use_container_width=True
+    t2_head_c1, t2_head_c2 = st.columns([3, 1])
+    with t2_head_c1:
+        st.subheader("📋 Kết quả Trích xuất Dữ liệu Cấu trúc & OCR Tiếng Việt")
+    with t2_head_c2:
+        is_editing = st.toggle(
+            "✏️ Chế độ Chỉnh sửa thủ công (HITL)",
+            value=st.session_state.get("is_editing_tab2", False),
+            help="Bật chế độ này để Thêm, Sửa hoặc Xóa thông tin định danh và dòng môn học khi AI nhận diện có sai sót."
         )
+        st.session_state["is_editing_tab2"] = is_editing
 
-    # Bảng điểm học phần
-    st.markdown("---")
-    st.markdown("#### 📊 Bảng Điểm & Học Phần Trích Xuất (Gom Cụm Dòng Trục Y)")
-    if courses:
-        course_display_list = []
-        for idx, c in enumerate(courses, 1):
-            course_display_list.append({
-                "STT": idx,
-                "Mã học phần": c.get("course_code", "N/A"),
-                "Tên học phần": c.get("course_name", "N/A"),
-                "Số tín chỉ": c.get("credits", "N/A"),
-                "Điểm trích xuất (Hệ 10 | 4 | Chữ)": c.get("score", "N/A"),
-                "Độ tin cậy OCR min": f"{c.get('min_ocr_confidence', 0.0):.3f}" if c.get("min_ocr_confidence") else "N/A"
-            })
-        df_courses = pd.DataFrame(course_display_list)
-        st.dataframe(df_courses, use_container_width=True)
+    if st.session_state.get("manual_edited"):
+        st.success("✍️ **Dữ liệu đã được hiệu chỉnh thủ công (Human-in-the-Loop)**. Báo cáo thẩm định quy chế và điểm tuân thủ đã được tính toán lại theo dữ liệu mới nhất.", icon="✅")
 
-        csv_courses = df_courses.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="📥 Tải Bảng Điểm CSV",
-            data=csv_courses,
-            file_name=f"{os.path.splitext(target_file_label)[0]}_courses.csv",
-            mime="text/csv"
-        )
+    field_labels = {
+        "student_name": "Họ và tên sinh viên",
+        "student_id": "Mã số sinh viên (MSSV)",
+        "class_name": "Lớp sinh hoạt",
+        "faculty": "Khoa đào tạo",
+        "major": "Chuyên ngành",
+        "dob": "Ngày tháng năm sinh",
+        "pob": "Nơi sinh",
+        "phone": "Số điện thoại liên hệ",
+        "email": "Email sinh viên / trường",
+        "date": "Ngày lập đơn",
+        "reason": "Lý do làm đơn",
+        "degree_info": "Bậc đào tạo / Khóa học"
+    }
+
+    if not is_editing:
+        # ==========================================
+        # CHẾ ĐỘ XEM CHUẨN (VIEW MODE)
+        # ==========================================
+        col_e1, col_e2 = st.columns([1, 1])
+
+        with col_e1:
+            st.markdown("#### 👤 Thông tin Định danh Sinh viên (Identity Fields)")
+            has_any_entity = False
+            for k, label in field_labels.items():
+                if k in entities:
+                    has_any_entity = True
+                    val = entities[k]
+                    val_str = ", ".join(str(v) for v in val) if isinstance(val, list) else str(val)
+                    st.markdown(f"""
+                    <div class="entity-box">
+                        <span style="font-size: 12px; color: #6C7A89; font-weight: 600;">{label}</span><br>
+                        <strong style="font-size: 15px; color: #1B365D;">{val_str}</strong>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            if not has_any_entity:
+                st.info("Chưa phát hiện trường định danh rõ ràng từ ảnh này.")
+
+        with col_e2:
+            st.markdown("#### 🔏 Tính Toàn vẹn Hồ sơ (Pháp lý & Chữ ký)")
+            st.markdown(f"""
+            - **Mộc dấu đỏ (Stamp):** {"✅ Đã phát hiện (" + str(verification.get("stamp_count", 0)) + " mộc)" if verification.get("has_stamp") else "❌ Không có con dấu"}
+            - **Chữ ký (Signature):** {"✅ Đã phát hiện (" + str(verification.get("signature_count", 0)) + " chữ ký)" if verification.get("has_signature") else "❌ Không có chữ ký"}
+            - **Yêu cầu loại mẫu:** {validation.get("form_spec", {}).get("signers", "Theo quy chế chung")}
+            """)
+
+            st.markdown("#### 💾 Xuất Dữ liệu Cấu trúc")
+            json_str = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+            st.download_button(
+                label="📥 Tải xuống Dữ liệu JSON (Full Extraction)",
+                data=json_str,
+                file_name=f"{os.path.splitext(target_file_label)[0]}_extracted.json",
+                mime="application/json",
+                use_container_width=True
+            )
+
+        # Bảng điểm học phần
+        st.markdown("---")
+        st.markdown("#### 📊 Bảng Điểm & Học Phần Trích Xuất (Gom Cụm Dòng Trục Y)")
+        if courses:
+            course_display_list = []
+            for idx, c in enumerate(courses, 1):
+                course_display_list.append({
+                    "STT": idx,
+                    "Mã học phần": c.get("course_code", "N/A"),
+                    "Tên học phần": c.get("course_name", "N/A"),
+                    "Số tín chỉ": c.get("credits", "N/A"),
+                    "Điểm trích xuất (Hệ 10 | 4 | Chữ)": c.get("score", "N/A"),
+                    "Độ tin cậy OCR min": f"{c.get('min_ocr_confidence', 0.0):.3f}" if c.get("min_ocr_confidence") else "N/A"
+                })
+            df_courses = pd.DataFrame(course_display_list)
+            st.dataframe(df_courses, use_container_width=True)
+
+            csv_courses = df_courses.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button(
+                label="📥 Tải Bảng Điểm CSV",
+                data=csv_courses,
+                file_name=f"{os.path.splitext(target_file_label)[0]}_courses.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("ℹ️ Biểu mẫu này không chứa bảng điểm học phần hoặc không nhận diện được dòng học phần.")
+
     else:
-        st.info("ℹ️ Biểu mẫu này không chứa bảng điểm học phần hoặc không nhận diện được dòng học phần.")
+        # ==========================================
+        # CHẾ ĐỘ CHỈNH SỬA THỦ CÔNG (EDIT / CRUD MODE)
+        # ==========================================
+        st.markdown("---")
+        st.markdown("### 🛠️ Giao diện Hiệu chỉnh Thủ công (Human-in-the-Loop Editor)")
+        st.caption("Cho phép Thêm / Sửa / Xóa bất kỳ thông tin nào bị OCR nhận diện nhầm, sau đó hệ thống sẽ tự động thẩm định lại theo quy chế.")
+
+        with st.form("hitl_edit_form"):
+            st.markdown("#### 1️⃣ Chỉnh sửa Thông tin Định danh (Identity Fields)")
+            
+            # Chia làm 2 cột input
+            e_col1, e_col2 = st.columns(2)
+            edited_entities = {}
+            
+            # Cột 1: Thông tin cơ bản
+            with e_col1:
+                cur_name = entities.get("student_name", "")
+                if isinstance(cur_name, list): cur_name = ", ".join(cur_name)
+                edited_entities["student_name"] = st.text_input("👤 Họ và tên sinh viên:", value=str(cur_name))
+
+                cur_id = entities.get("student_id", "")
+                if isinstance(cur_id, list): cur_id = ", ".join(cur_id)
+                edited_entities["student_id"] = st.text_input("🆔 Mã số sinh viên (MSSV):", value=str(cur_id))
+
+                cur_class = entities.get("class_name", "")
+                if isinstance(cur_class, list): cur_class = ", ".join(cur_class)
+                edited_entities["class_name"] = st.text_input("🏫 Lớp sinh hoạt:", value=str(cur_class))
+
+                cur_fac = entities.get("faculty", "")
+                if isinstance(cur_fac, list): cur_fac = ", ".join(cur_fac)
+                edited_entities["faculty"] = st.text_input("🏢 Khoa đào tạo:", value=str(cur_fac))
+
+            # Cột 2: Thông tin liên hệ & Đơn
+            with e_col2:
+                cur_phone = entities.get("phone", "")
+                if isinstance(cur_phone, list): cur_phone = ", ".join(cur_phone)
+                edited_entities["phone"] = st.text_input("📞 Số điện thoại liên hệ:", value=str(cur_phone))
+
+                cur_date = entities.get("date", "")
+                if isinstance(cur_date, list): cur_date = ", ".join(cur_date)
+                edited_entities["date"] = st.text_input("📅 Ngày lập đơn (dd/mm/yyyy):", value=str(cur_date))
+
+                cur_major = entities.get("major", "")
+                if isinstance(cur_major, list): cur_major = ", ".join(cur_major)
+                edited_entities["major"] = st.text_input("🎓 Chuyên ngành:", value=str(cur_major))
+
+                cur_reason = entities.get("reason", "")
+                if isinstance(cur_reason, list): cur_reason = ", ".join(cur_reason)
+                edited_entities["reason"] = st.text_input("📝 Lý do làm đơn:", value=str(cur_reason))
+
+            st.markdown("#### 2️⃣ Xác nhận Pháp lý (Con dấu & Chữ ký)")
+            p_col1, p_col2 = st.columns(2)
+            with p_col1:
+                has_stamp_check = st.checkbox("Có con dấu tròn đỏ (Stamp)", value=verification.get("has_stamp", False))
+                stamp_num = st.number_input("Số lượng con dấu phát hiện:", min_value=0, max_value=10, value=int(verification.get("stamp_count", 0)))
+            with p_col2:
+                has_sig_check = st.checkbox("Có chữ ký viết tay (Signature)", value=verification.get("has_signature", False))
+                sig_num = st.number_input("Số lượng chữ ký phát hiện:", min_value=0, max_value=20, value=int(verification.get("signature_count", 0)))
+
+            st.markdown("#### 3️⃣ Chỉnh sửa Bảng Điểm & Học Phần (Thêm / Sửa / Xóa dòng)")
+            st.caption("💡 **Mẹo:** Bạn có thể click trực tiếp vào ô để **Sửa**, click vào dòng cuối có dấu `+` để **Thêm dòng môn học**, hoặc chọn dòng và nhấn phím **Delete** trên bàn phím để **Xóa dòng**.")
+
+            # Chuẩn bị DataFrame cho data_editor
+            table_rows_data = []
+            for c in courses:
+                table_rows_data.append({
+                    "Mã học phần": str(c.get("course_code", "")),
+                    "Tên học phần": str(c.get("course_name", "")),
+                    "Số tín chỉ": str(c.get("credits", "")),
+                    "Điểm (Hệ 10)": str(c.get("score", ""))
+                })
+            if not table_rows_data:
+                table_rows_data.append({"Mã học phần": "", "Tên học phần": "", "Số tín chỉ": "", "Điểm (Hệ 10)": ""})
+
+            df_edit_courses = pd.DataFrame(table_rows_data)
+            edited_courses_df = st.data_editor(
+                df_edit_courses,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "Mã học phần": st.column_config.TextColumn(help="VD: MOBI330980, MATH141701", required=True),
+                    "Tên học phần": st.column_config.TextColumn(help="Tên đầy đủ của môn học", required=True),
+                    "Số tín chỉ": st.column_config.TextColumn(help="Số tín chỉ (VD: 3, 4)"),
+                    "Điểm (Hệ 10)": st.column_config.TextColumn(help="VD: 8.6, 6.4, 0.0", required=True),
+                },
+                key="hitl_data_editor"
+            )
+
+            # Nút Lưu thay đổi bên trong form
+            st.markdown("---")
+            btn_save = st.form_submit_button("💾 Lưu thay đổi & Thẩm định lại Quy chế", type="primary", use_container_width=True)
+
+        # Nút khôi phục ngoài form
+        r_col1, r_col2 = st.columns([1, 1])
+        with r_col1:
+            if st.button("🔄 Khôi phục kết quả AI gốc (Reset to AI)", use_container_width=True):
+                if "manual_edited" in st.session_state:
+                    del st.session_state["manual_edited"]
+                if "last_processed_file" in st.session_state:
+                    del st.session_state["last_processed_file"]
+                st.session_state["is_editing_tab2"] = False
+                st.toast("🔄 Đã khôi phục kết quả nhận dạng AI gốc!", icon="🔄")
+                st.rerun()
+
+        # Xử lý khi nhấn Lưu
+        if btn_save:
+            # 1. Cập nhật Entities
+            clean_ents = {}
+            for k, val in edited_entities.items():
+                v_str = str(val).strip()
+                if v_str:
+                    clean_ents[k] = v_str
+            st.session_state["inference_result"]["entities"] = clean_ents
+
+            # 2. Cập nhật Verification
+            st.session_state["inference_result"]["verification"]["has_stamp"] = has_stamp_check
+            st.session_state["inference_result"]["verification"]["stamp_count"] = int(stamp_num)
+            st.session_state["inference_result"]["verification"]["has_signature"] = has_sig_check
+            st.session_state["inference_result"]["verification"]["signature_count"] = int(sig_num)
+
+            # 3. Cập nhật Bảng điểm
+            new_courses_list = []
+            for _, r in edited_courses_df.iterrows():
+                c_code = str(r.get("Mã học phần", "")).strip()
+                c_name = str(r.get("Tên học phần", "")).strip()
+                c_cred = str(r.get("Số tín chỉ", "")).strip()
+                c_score = str(r.get("Điểm (Hệ 10)", "")).strip()
+                if c_code or c_name:
+                    new_courses_list.append({
+                        "course_code": c_code,
+                        "course_name": c_name,
+                        "credits": c_cred,
+                        "score": c_score,
+                        "scores": [c_score] if c_score else [],
+                        "row_box": [0, 0, 0, 0]
+                    })
+            st.session_state["inference_result"]["courses_table"] = new_courses_list
+
+            # 4. Chạy lại Rule Engine Thẩm định
+            re_val = engine.rule_engine.validate(st.session_state["inference_result"], form_type=form_type)
+            st.session_state["inference_result"]["validation"] = re_val
+            st.session_state["manual_edited"] = True
+
+            st.toast("✅ Đã lưu dữ liệu hiệu chỉnh và cập nhật lại báo cáo thẩm định!", icon="🎉")
+            st.rerun()
 
 
 # ---------------------------------------------------------------------
