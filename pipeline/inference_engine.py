@@ -422,7 +422,8 @@ class DocumentLayoutAndOCR:
             # Với số điện thoại, mở rộng biên trái (+25px) để không bị xén mất tiền tố 08/09
             pad_l = 25 if cls_name == "phone" else 3
             pad_r = 5 if cls_name == "phone" else 3
-            crop = img_pil.crop((max(0, x0 - pad_l), max(0, y0 - 3),
+            x0_eff = max(0, x0 - pad_l)
+            crop = img_pil.crop((x0_eff, max(0, y0 - 3),
                                  min(w_img, x1 + pad_r), min(h_img, y1 + 3)))
             rec_text, ocr_conf = self._ocr_crop(crop)
 
@@ -430,7 +431,7 @@ class DocumentLayoutAndOCR:
                 "class_name": cls_name,
                 "confidence": round(score, 3),
                 "ocr_confidence": round(ocr_conf, 3) if ocr_conf is not None else None,
-                "box": [x0, y0, x1, y1],
+                "box": [x0_eff if cls_name == "phone" else x0, y0, x1, y1],
                 "text": rec_text
             }
             structured_result["raw_detections"].append(d_record)
