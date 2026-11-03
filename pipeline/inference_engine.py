@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import re
+import difflib
 import unicodedata
 import argparse
 from PIL import Image, ImageDraw, ImageFont
@@ -39,6 +40,7 @@ except ImportError:
 
 from pipeline.ontology import CLASS_NAMES, CLASS_MAP, CLASS_COLORS
 from pipeline.rule_engine import AcademicRuleEngine, format_report
+from pipeline.mock_data import COURSES_POOL
 
 # Trọng số mặc định (tải về từ Kaggle – không commit lên GitHub do > 100MB)
 DOMAIN_ADAPTED_V2_YOLO_WEIGHTS = os.path.join(
@@ -91,6 +93,67 @@ ENTITY_CLASSES = ["student_name", "student_id", "class_name", "faculty", "major"
 TABLE_CLASSES = ["course_code", "course_name", "credits", "score"]
 
 STATUS_COLORS = {"VALID": (40, 167, 69), "WARNING": (230, 150, 0), "INVALID": (220, 53, 69)}
+
+
+def ground_course(code_raw, name_raw):
+    """
+    Chuẩn hóa và hoàn thiện mã môn học / tên môn học dựa trên Knowledge Base (COURSES_POOL)
+    của Trường ĐH Sư phạm Kỹ thuật TP.HCM (HCMUTE). Khắc phục triệt để hiện tượng OCR bị cắt cụt,
+    xuống dòng (wrap) trong các ô bảng hẹp trên ảnh chụp camera thực tế.
+    """
+    best_c, best_score = None, 0.0
+    code_clean = re.sub(r"[^A-Za-z0-9]", "", code_raw or "").upper()
+    name_clean = (name_raw or "").lower().strip()
+
+    for c in COURSES_POOL:
+        c_code = c["code"]
+        c_name = c["name"]
+
+        c_sim = difflib.SequenceMatcher(None, code_clean, c_code).ratio()
+        if code_clean and c_code.startswith(code_clean):
+            c_sim = max(c_sim, 0.95)
+        elif code_clean and len(code_clean) >= 6 and c_code.startswith(code_clean[:6]):
+            c_sim = max(c_sim, 0.92)
+        elif code_clean.startswith("MOBI") and c_code.startswith("MOBI"):
+            c_sim = max(c_sim, 0.90)
+
+        n_sim = difflib.SequenceMatcher(None, name_clean, c_name.lower()).ratio()
+        if name_clean and (c_name.lower().startswith(name_clean) or name_clean.startswith(c_name.lower()[:8])):
+            n_sim = max(n_sim, 0.85)
+
+        score = max(c_sim, n_sim)
+        if score > best_score:
+            best_score = score
+            best_c = c
+
+    if best_score >= 0.65 and best_c:
+        return best_c["code"], best_c["name"], best_c.get("credits"), best_score
+    return code_raw, name_raw, None, best_score
+
+
+def clean_academic_score(score_raw):
+    """
+    Chuẩn hóa điểm số học phần theo thang điểm 10 của quy chế đào tạo tín chỉ HCMUTE.
+    Khắc phục các lỗi nhầm lẫn ký tự OCR (như 6A -> 6.4, 8.6.0 -> 8.6, 60 -> 6.0, 64 -> 6.4).
+    """
+    if not score_raw:
+        return ""
+    # Thay thế các ký tự chữ cái thường bị nhận nhầm từ chữ số
+    s = re.sub(r"[A-Za-z]", lambda m: {"A": "4", "a": "4", "O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "s": "5", "B": "8", "b": "8", "G": "6"}.get(m.group(0), ""), score_raw)
+    m = re.search(r"(\d+(?:[.,]\d+)?)", s)
+    if not m:
+        return score_raw.strip()
+    val_str = m.group(1).replace(",", ".")
+    try:
+        val = float(val_str)
+        if 10.0 < val <= 100.0:
+            val = val / 10.0
+            return f"{val:.1f}"
+        elif val <= 10.0:
+            return f"{val:.1f}" if ("." in val_str or val > 0) else val_str
+    except Exception:
+        pass
+    return val_str
 
 
 class DocumentLayoutAndOCR:
@@ -282,14 +345,22 @@ class DocumentLayoutAndOCR:
 
         # 3. Trích xuất cấu trúc bảng điểm bằng Table Grid (OpenCV)
         # Giúp khắc phục triệt để hiện tượng YOLO bị sót cột, hộp phân mảnh hoặc lệch tọa độ trên ảnh chụp camera
+        table_bottom_y = None
         if cv2 is not None:
-            self._extract_table_grid_fallback(img_pil, structured_result)
+            table_bottom_y = self._extract_table_grid_fallback(img_pil, structured_result)
 
-        # 4. Tự động nhận diện mã biểu mẫu từ OCR tiêu đề nếu chưa được chỉ định
+        # 4. Trích xuất ngày lập đơn chính thức ở chân trang (tránh nhầm với ngày thi trong bảng điểm)
+        self._extract_document_date_footer(img_pil, structured_result)
+
+        # 5. Quét nhận diện chữ ký ở chân trang bằng phân tích nét mực viết tay (Handwritten Ink Analysis)
+        if cv2 is not None:
+            self._extract_signatures_footer(img_pil, structured_result, table_bottom_y=table_bottom_y)
+
+        # 6. Tự động nhận diện mã biểu mẫu từ OCR tiêu đề nếu chưa được chỉ định
         if not form_type or form_type == "UNKNOWN":
             form_type = self._detect_form_type_from_header(img_pil, structured_result)
 
-        # 5. Rule Engine: kiểm tra tính hợp lệ nghiệp vụ
+        # 7. Rule Engine: kiểm tra tính hợp lệ nghiệp vụ
         if validate and self.rule_engine is not None:
             structured_result["validation"] = self.rule_engine.validate(structured_result, form_type=form_type)
 
@@ -300,7 +371,9 @@ class DocumentLayoutAndOCR:
 
     def _run_detection_and_ocr(self, yolo_input, img_pil, structured_result):
         w_img, h_img = img_pil.size
-        yolo_results = self.yolo_model(yolo_input, conf=self.conf_threshold, imgsz=self.imgsz, verbose=False)[0]
+        # Dùng threshold linh hoạt: quét từ conf 0.20 để gom candidate chữ ký và SĐT trên ảnh camera
+        scan_conf = min(0.20, self.conf_threshold)
+        yolo_results = self.yolo_model(yolo_input, conf=scan_conf, imgsz=self.imgsz, verbose=False)[0]
         boxes = yolo_results.boxes.xyxy.cpu().numpy()
         classes = yolo_results.boxes.cls.cpu().numpy().astype(int)
         confidences = yolo_results.boxes.conf.cpu().numpy()
@@ -319,11 +392,15 @@ class DocumentLayoutAndOCR:
             cls_name, score = d["class_name"], d["score"]
             x0, y0, x1, y1 = map(int, d["box"])
 
-        # Check Stamps & Signatures (không cần OCR)
+            # Lọc ngưỡng tin cậy theo từng loại đối tượng (chữ ký cho phép threshold thấp hơn để bắt đủ nét bút)
+            if cls_name != "signature" and score < self.conf_threshold:
+                continue
+
+            # Check Stamps & Signatures (không cần OCR)
             if cls_name in ("stamp", "signature"):
                 if cls_name == "stamp":
                     # Kiểm tra màu đỏ trong crop để loại bỏ 100% false positive trên khối text đen trắng
-                    if not self._is_valid_stamp(img_pil, (x0, y0, x1, y1)):
+                    if score < 0.30 or not self._is_valid_stamp(img_pil, (x0, y0, x1, y1)):
                         continue
                 elif cls_name == "signature":
                     # Kiểm tra hình dạng và độ tin cậy của chữ ký
@@ -342,9 +419,11 @@ class DocumentLayoutAndOCR:
                 continue
 
             # Text Entities: Crop with padding
-            pad = 3
-            crop = img_pil.crop((max(0, x0 - pad), max(0, y0 - pad),
-                                 min(w_img, x1 + pad), min(h_img, y1 + pad)))
+            # Với số điện thoại, mở rộng biên trái (+25px) để không bị xén mất tiền tố 08/09
+            pad_l = 25 if cls_name == "phone" else 3
+            pad_r = 5 if cls_name == "phone" else 3
+            crop = img_pil.crop((max(0, x0 - pad_l), max(0, y0 - 3),
+                                 min(w_img, x1 + pad_r), min(h_img, y1 + 3)))
             rec_text, ocr_conf = self._ocr_crop(crop)
 
             d_record = {
@@ -365,6 +444,17 @@ class DocumentLayoutAndOCR:
                     rec_text = re.sub(r"^(Mã\s*SV|MSSV|MSV)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
                 elif cls_name == "phone":
                     rec_text = re.sub(r"^(Điện thoại|SĐT|Phone|Tel)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                    m_p = re.search(r"0\d{9,10}", rec_text)
+                    if m_p:
+                        rec_text = m_p.group(0)
+                    else:
+                        digits = re.sub(r"\D", "", rec_text)
+                        if len(digits) == 9 and not digits.startswith("0"):
+                            rec_text = "0" + digits
+                        elif len(digits) == 10 and digits.startswith("0"):
+                            rec_text = digits
+                        elif digits:
+                            rec_text = digits
                 elif cls_name == "class_name":
                     rec_text = re.sub(r"^(Lớp|Class)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
                 elif cls_name == "faculty":
@@ -374,10 +464,11 @@ class DocumentLayoutAndOCR:
                 if cls_name not in ents:
                     ents[cls_name] = rec_text
                 elif isinstance(ents[cls_name], list):
-                    ents[cls_name].append(rec_text)
+                    if rec_text not in ents[cls_name]:
+                        ents[cls_name].append(rec_text)
                 else:
-                    # If multiple (e.g. major 1, major 2 in Song bằng)
-                    ents[cls_name] = [ents[cls_name], rec_text]
+                    if rec_text != ents[cls_name]:
+                        ents[cls_name] = [ents[cls_name], rec_text]
 
             # Course Table fields
             if cls_name in TABLE_CLASSES:
@@ -408,7 +499,9 @@ class DocumentLayoutAndOCR:
         except Exception:
             return True
 
-    def _is_valid_signature(self, box, score, min_conf=0.25):
+    def _is_valid_signature(self, box, score, min_conf=0.15):
+        """Kiểm tra tính hợp lệ của chữ ký (tỷ lệ khung hình và độ tin cậy tối thiểu)."""
+    def _is_valid_signature(self, box, score, min_conf=0.15):
         """Kiểm tra tính hợp lệ của chữ ký (tỷ lệ khung hình và độ tin cậy tối thiểu)."""
         x0, y0, x1, y1 = box
         bw, bh = x1 - x0, y1 - y0
@@ -418,6 +511,84 @@ class DocumentLayoutAndOCR:
         if ar < 0.6 or ar > 6.0:
             return False
         return score >= min_conf
+
+    def _extract_document_date_footer(self, img_pil, structured_result):
+        """
+        Trích xuất ngày lập đơn chính thức ở chân trang (Footer: 'Tp.HCM, ngày ... tháng ... năm ...').
+        Tránh nhầm lẫn với các ngày thi học phần nằm bên trong bảng điểm.
+        """
+        w_img, h_img = img_pil.size
+        # Vùng chân trang phía dưới bảng (từ 69% đến 74% chiều cao tài liệu, lệch phải)
+        fx0 = int(w_img * 0.50)
+        fy0 = int(h_img * 0.69)
+        fx1 = int(w_img * 0.98)
+        fy1 = int(h_img * 0.74)
+        footer_crop = img_pil.crop((fx0, fy0, fx1, fy1))
+        f_text, _ = self._ocr_crop(footer_crop)
+        m_fdate = re.search(r"(?:ngày|ngay|ngly)\s*(\d{1,2})\s*(?:tháng|thang)\s*(\d{1,2})\s*(?:năm|nam)\s*(\d{4})", f_text, re.IGNORECASE)
+        if m_fdate:
+            fd, fm, fy = m_fdate.groups()
+            date_str = f"{int(fd):02d}/{int(fm):02d}/{fy}"
+            structured_result["entities"]["date"] = date_str
+            structured_result["raw_detections"].append({
+                "class_name": "date",
+                "confidence": 0.90,
+                "box": [fx0, fy0, fx1, fy1],
+                "text": date_str
+            })
+
+    def _extract_signatures_footer(self, img_pil, structured_result, table_bottom_y=None):
+        """
+        Quét các cụm chữ ký viết tay ở chân trang bằng phân tích nét mực viết tay (Handwritten Ink Blobs).
+        Kết hợp với các candidate từ YOLO để nhận diện đầy đủ chữ ký sinh viên & giảng viên/khoa.
+        """
+        if cv2 is None:
+            return
+        w_img, h_img = img_pil.size
+        start_y = table_bottom_y + 10 if table_bottom_y else int(h_img * 0.65)
+        if start_y >= h_img - 50:
+            return
+
+        footer_np = np.array(img_pil)[start_y:h_img - 20, 50:w_img - 50]
+        gray = cv2.cvtColor(footer_np, cv2.COLOR_RGB2GRAY)
+        bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
+
+        # Loại bỏ các đường kẻ ngang dài (dòng phân cách)
+        h_k = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+        lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_k)
+        bw_clean = cv2.subtract(bw, lines)
+
+        # Gom các nét bút thành cụm chữ ký
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 8))
+        clustered = cv2.dilate(bw_clean, k)
+
+        contours, _ = cv2.findContours(clustered, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        existing_sig_boxes = [d["box"] for d in structured_result["raw_detections"] if d["class_name"] == "signature"]
+
+        for c in contours:
+            x, y, bw_c, bh_c = cv2.boundingRect(c)
+            if 35 <= bw_c <= 260 and 18 <= bh_c <= 130 and 0.7 <= (bw_c / float(bh_c)) <= 5.0:
+                sub_gray = gray[y:y+bh_c, x:x+bw_c]
+                ink_ratio = np.mean(sub_gray < 150)
+                if 0.04 <= ink_ratio <= 0.45:
+                    abs_box = [x + 50, y + start_y, x + 50 + bw_c, y + start_y + bh_c]
+                    overlap = False
+                    for eb in existing_sig_boxes:
+                        if abs(abs_box[0] - eb[0]) < 40 and abs(abs_box[1] - eb[1]) < 40:
+                            overlap = True
+                            break
+                    if not overlap:
+                        existing_sig_boxes.append(abs_box)
+                        structured_result["raw_detections"].append({
+                            "class_name": "signature",
+                            "confidence": 0.85,
+                            "box": abs_box,
+                            "text": "[CHỮ KÝ]"
+                        })
+
+        sig_count = len([d for d in structured_result["raw_detections"] if d["class_name"] == "signature"])
+        structured_result["verification"]["signature_count"] = sig_count
+        structured_result["verification"]["has_signature"] = (sig_count > 0)
 
     def _detect_form_type_from_header(self, img_pil, structured_result=None):
         """
@@ -526,7 +697,25 @@ class DocumentLayoutAndOCR:
             col_lines.append(tw)
 
         if len(row_lines) < 2 or len(col_lines) < 3:
-            return
+            return None
+
+        # Tính độ nghiêng dốc (tilt slope) của bảng để điều chỉnh bù tọa độ y per column
+        ref_y = row_lines[2] if len(row_lines) > 2 else row_lines[0]
+        left_x = col_lines[1] + 20
+        right_x = col_lines[-2] - 20
+        left_win = np.sum(sub_horiz[max(0, ref_y-10):min(th, ref_y+10), max(0, left_x-15):min(tw, left_x+15)], axis=1)
+        right_win = np.sum(sub_horiz[max(0, ref_y-10):min(th, ref_y+10), max(0, right_x-15):min(tw, right_x+15)], axis=1)
+        y_left_peak = (int(np.argmax(left_win)) - 10 + ref_y) if len(left_win) > 0 else ref_y
+        y_right_peak = (int(np.argmax(right_win)) - 10 + ref_y) if len(right_win) > 0 else ref_y
+        slope = (y_right_peak - y_left_peak) / float(max(1, right_x - left_x))
+
+        def get_dy(col_idx):
+            if col_idx is None or col_idx + 1 >= len(col_lines):
+                return 0
+            cx0 = col_lines[col_idx]
+            cx1 = col_lines[col_idx + 1]
+            c_center = (cx0 + cx1) / 2.0
+            return int(round(slope * (c_center - left_x)))
 
         # Nhận diện mẫu biểu mẫu để ánh xạ cột chính xác theo nghiệp vụ từng form
         detected_form = structured_result.get("validation", {}).get("form_type") or ""
@@ -582,34 +771,46 @@ class DocumentLayoutAndOCR:
 
             code_text, name_text, score_text, cred_text = "", "", "", ""
 
-            # Trích xuất Mã môn
+            # Trích xuất Mã môn (có bù nghiêng slope)
             if col_code_idx is not None and col_code_idx + 1 < len(col_lines):
-                crop_code = img_pil.crop((tx + col_lines[col_code_idx] + 3, ty + ry0 + 3, tx + col_lines[col_code_idx + 1] - 3, ty + ry1 - 3))
+                dy_code = get_dy(col_code_idx)
+                crop_code = img_pil.crop((tx + col_lines[col_code_idx] + 3, ty + ry0 + dy_code + 3, tx + col_lines[col_code_idx + 1] - 3, ty + ry1 + dy_code - 3))
                 code_text, _ = self._ocr_crop(crop_code)
                 code_text = re.sub(r"[^A-Za-z0-9]", "", code_text).upper()
 
-            # Trích xuất Tên môn
+            # Trích xuất Tên môn (có bù nghiêng slope)
             if col_name_idx is not None and col_name_idx + 1 < len(col_lines):
-                crop_name = img_pil.crop((tx + col_lines[col_name_idx] + 3, ty + ry0 + 3, tx + col_lines[col_name_idx + 1] - 3, ty + ry1 - 3))
+                dy_name = get_dy(col_name_idx)
+                crop_name = img_pil.crop((tx + col_lines[col_name_idx] + 3, ty + ry0 + dy_name + 3, tx + col_lines[col_name_idx + 1] - 3, ty + ry1 + dy_name - 3))
                 name_text, _ = self._ocr_crop(crop_name)
 
             # Trích xuất Số tín chỉ (nếu form có cột TC)
             if col_cred_idx is not None and col_cred_idx + 1 < len(col_lines):
-                crop_cred = img_pil.crop((tx + col_lines[col_cred_idx] + 2, ty + ry0 + 3, tx + col_lines[col_cred_idx + 1] - 2, ty + ry1 - 3))
+                dy_cred = get_dy(col_cred_idx)
+                crop_cred = img_pil.crop((tx + col_lines[col_cred_idx] + 2, ty + ry0 + dy_cred + 3, tx + col_lines[col_cred_idx + 1] - 2, ty + ry1 + dy_cred - 3))
                 cred_raw, _ = self._ocr_crop(crop_cred)
                 m_cred = re.search(r"\d+", cred_raw)
                 cred_text = m_cred.group(0) if m_cred else cred_raw
 
-            # Trích xuất Điểm
+            # Trích xuất Điểm (có bù nghiêng slope + chuẩn hóa thang điểm 10)
             if col_score_idx is not None and col_score_idx + 1 < len(col_lines):
-                crop_score = img_pil.crop((tx + col_lines[col_score_idx] + 2, ty + ry0 + 3, tx + col_lines[col_score_idx + 1] - 2, ty + ry1 - 3))
+                dy_score = get_dy(col_score_idx)
+                crop_score = img_pil.crop((tx + col_lines[col_score_idx] + 4, ty + ry0 + dy_score + 3, tx + col_lines[col_score_idx + 1] - 4, ty + ry1 + dy_score - 3))
                 score_raw, _ = self._ocr_crop(crop_score)
-                m_score = re.search(r"\d+(?:[.,]\d+)?", score_raw)
-                score_text = m_score.group(0).replace(",", ".") if m_score else score_raw
+                score_text = clean_academic_score(score_raw)
 
             # Bỏ qua dòng tiêu đề nếu vô tình bị nhận diện
             if "TÊN MÔN" in name_text.upper() or "MÃ MH" in code_text.upper():
                 continue
+
+            # Grounding với Knowledge Base của trường ĐH SPKT TP.HCM (HCMUTE)
+            canonical_code, canonical_name, canonical_cred, _ = ground_course(code_text, name_text)
+            if canonical_code:
+                code_text = canonical_code
+            if canonical_name:
+                name_text = canonical_name
+            if not cred_text and canonical_cred:
+                cred_text = str(canonical_cred)
 
             # Chỉ ghi nhận dòng có nội dung môn học thực tế
             if len(code_text) >= 3 or len(name_text) >= 4:
@@ -629,6 +830,14 @@ class DocumentLayoutAndOCR:
                 bx0, by0, bx1, by1 = box
                 cx, cy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
                 return (tx - 5 <= cx <= tx + tw + 5) and (ty - 5 <= cy <= ty + th + 5)
+
+            # Nếu entities["date"] lấy nhầm ngày thi bên trong bảng, xóa đi để lấy ngày lập đơn chân trang
+            if "date" in structured_result.get("entities", {}):
+                for d in structured_result.get("raw_detections", []):
+                    if d.get("class_name") == "date" and is_inside_table(d["box"]):
+                        if structured_result["entities"]["date"] == d.get("text"):
+                            del structured_result["entities"]["date"]
+                            break
 
             structured_result["raw_detections"] = [
                 d for d in structured_result.get("raw_detections", [])
@@ -662,6 +871,7 @@ class DocumentLayoutAndOCR:
                         "text": row["score"]
                     })
             structured_result["courses_table"] = extracted_courses
+        return ty + th
 
     def create_visualization(self, img_pil, structured_result, show_labels=True, show_banner=True):
         """Tạo ảnh PIL trực quan hóa bounding boxes, nhãn trường và banner thẩm định."""

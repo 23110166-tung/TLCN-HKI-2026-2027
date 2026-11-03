@@ -173,7 +173,7 @@ st.markdown(f"""
 # 2. KHỞI TẠO VÀ CACHE MÔ HÌNH HỌC SÂU (YOLOV11 + VIETOCR)
 # =====================================================================
 @st.cache_resource(show_spinner=False)
-def get_inference_engine(yolo_weight_path, conf_threshold, device, engine_version="v2.2_table_grid_early_stop"):
+def get_inference_engine(yolo_weight_path, conf_threshold, device, engine_version="v2.3_kb_grounding_tilt_signatures"):
     """Nạp mô hình 1 lần duy nhất vào bộ nhớ RAM/VRAM để tăng tốc suy luận."""
     engine = DocumentLayoutAndOCR(
         yolo_model_path=yolo_weight_path,
