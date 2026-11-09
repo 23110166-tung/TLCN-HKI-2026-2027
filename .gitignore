@@ -36,6 +36,7 @@ syn_test_vis.png
 scratch/
 runs/
 *.zip
+HCMUTE_DocAI_Demo_Package/
 __pycache__/
 *.pyc
 *.pyo
