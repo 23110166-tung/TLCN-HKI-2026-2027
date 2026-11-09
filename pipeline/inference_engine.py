@@ -46,6 +46,9 @@ from pipeline.mock_data import COURSES_POOL
 DOMAIN_ADAPTED_V2_YOLO_WEIGHTS = os.path.join(
     BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2", "yolo11_domain_adapted_best.pt"
 )
+DOMAIN_ADAPTED_V2_ONNX_WEIGHTS = os.path.join(
+    BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2", "yolo11_domain_adapted_best.onnx"
+)
 DOMAIN_ADAPTED_YOLO_WEIGHTS = os.path.join(
     BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts", "yolo11_domain_adapted_best.pt"
 )
@@ -184,14 +187,15 @@ class DocumentLayoutAndOCR:
 
         # 1. Load YOLO Model (ưu tiên trọng số fine-tuned của đề tài)
         yolo_model_path = yolo_model_path or DEFAULT_YOLO_WEIGHTS
+        self.yolo_model_path_used = yolo_model_path
         if YOLO is None:
             print("⚠️ Chưa cài ultralytics – bỏ qua bước Layout Detection.")
         elif os.path.exists(yolo_model_path):
             print(f"📦 Đang tải mô hình YOLO Layout từ: {yolo_model_path}")
-            self.yolo_model = YOLO(yolo_model_path)
+            self.yolo_model = YOLO(yolo_model_path, task="detect")
         else:
             print("⚠️ Không tìm thấy trọng số fine-tuned, đang khởi tạo YOLO11n mặc định...")
-            self.yolo_model = YOLO("yolo11n.pt")
+            self.yolo_model = YOLO("yolo11n.pt", task="detect")
 
         # 2. Load VietOCR Predictor (ưu tiên trọng số fine-tuned – RQ1: EM 51.67% → 69.78%)
         ocr_weights_path = ocr_weights_path or DEFAULT_OCR_WEIGHTS
@@ -324,7 +328,12 @@ class DocumentLayoutAndOCR:
         structured_result = {
             "document_file": doc_name,
             "image_size": {"width": w_img, "height": h_img},
-            "models": {"ocr_engine": self.ocr_engine_type, "ocr_weights": self.ocr_weights_used},
+            "models": {
+                "layout_engine": "ONNX Runtime (.onnx)" if str(getattr(self, "yolo_model_path_used", "")).endswith(".onnx") else "PyTorch Native (.pt)",
+                "layout_weights": getattr(self, "yolo_model_path_used", DEFAULT_YOLO_WEIGHTS),
+                "ocr_engine": self.ocr_engine_type,
+                "ocr_weights": self.ocr_weights_used
+            },
             "entities": {},
             "courses_table": [],
             "verification": {
@@ -399,8 +408,8 @@ class DocumentLayoutAndOCR:
                     if score < 0.30 or not self._is_valid_stamp(img_pil, (x0, y0, x1, y1)):
                         continue
                 elif cls_name == "signature":
-                    # Kiểm tra hình dạng và độ tin cậy của chữ ký
-                    if not self._is_valid_signature((x0, y0, x1, y1), score):
+                    # Kiểm tra hình dạng, vị trí chân trang và độ tin cậy của chữ ký
+                    if not self._is_valid_signature((x0, y0, x1, y1), score, h_img=h_img):
                         continue
 
                 key = "stamp" if cls_name == "stamp" else "signature"
@@ -435,12 +444,24 @@ class DocumentLayoutAndOCR:
             # Map to semantic fields
             if cls_name in ENTITY_CLASSES and rec_text:
                 if cls_name == "student_name":
-                    rec_text = re.sub(r"^(Họ và tên sinh viên|Họ và tên|Họ tên)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE)
-                    rec_text = re.split(r"(?:Mã\s*SV|MSSV|SĐT|Điện thoại)", rec_text, flags=re.IGNORECASE)[0].strip()
+                    rec_text = re.sub(r"^(?:Họ và tên sinh viên|Họ và tên|Họ tên|Tôi tên|Em tên|sinh viên|Linu)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE)
+                    rec_text = re.split(r"(?:Mã\s*SV|MSSV|SĐT|Điện thoại|Sinh ngày|Lớp)", rec_text, flags=re.IGNORECASE)[0].strip()
+                    rec_text = re.sub(r"\s*(?:Liệu|Đội|Điện thoại|MSSV)$", "", rec_text, flags=re.IGNORECASE).strip()
+                    # Khử hiện tượng mực mặt sau giấy (bleed-through) in các môn lý luận/khoa học bị đọc nhầm thành tên
+                    if any(bt in rec_text.lower() for bt in ["chủ nghĩa xã hội", "triết học", "kinh tế chính trị", "tư tưởng hồ chí minh"]):
+                        rec_text = ""
                 elif cls_name == "student_id":
-                    rec_text = re.sub(r"^(Mã\s*SV|MSSV|MSV)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                    rec_text = re.sub(r"^(?:Mã\s*SV|MSSV|MSV|Mã số sinh viên)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                    # MSSV HCMUTE chuẩn gồm 8 chữ số (bắt đầu bằng 1x hoặc 2x)
+                    m_mssv = re.search(r"\b(2\d{7}|1\d{7})\b", rec_text)
+                    if not m_mssv:
+                        m_mssv = re.search(r"\d{8}", rec_text)
+                    if m_mssv:
+                        rec_text = m_mssv.group(0)
+                    else:
+                        rec_text = re.split(r"[^\dA-Za-z]", rec_text)[0].strip()
                 elif cls_name == "phone":
-                    rec_text = re.sub(r"^(Điện thoại|SĐT|Phone|Tel)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                    rec_text = re.sub(r"^(?:Điện thoại|SĐT|Phone|Tel)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
                     m_p = re.search(r"0\d{9,10}", rec_text)
                     if m_p:
                         rec_text = m_p.group(0)
@@ -456,16 +477,77 @@ class DocumentLayoutAndOCR:
                     rec_text = re.sub(r"^(Lớp|Class)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
                 elif cls_name == "faculty":
                     rec_text = re.sub(r"^(Khoa|Khoa\s*\(TT\))\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                elif cls_name == "email":
+                    # Chuẩn hóa OCR email: OCR thường nhận nhầm @ thành 0 (vd 251455350student... -> @student)
+                    rec_text = re.sub(r"(\d+)0(student\.hcmute\.edu\.vn)", r"\1@\2", rec_text)
+                    rec_text = re.sub(r"^(?:Email|E-mail|Mail)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                    m_em = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", rec_text)
+                    if m_em:
+                        rec_text = m_em.group(0)
+                    elif "hcmute.edu.vn" in rec_text:
+                        rec_text = rec_text.split()[-1]
+                    else:
+                        rec_text = ""
+                elif cls_name == "major":
+                    rec_text = re.sub(r"^(?:Ngành|Chuyên ngành|Major)\s*[:.-]?\s*", "", rec_text, flags=re.IGNORECASE).strip()
+                    # Khử các từ rác in ở chân trang bị nhận nhầm thành ngành học
+                    if any(bad in rec_text.lower() for bad in ["conform", "quyết định", "đào tạo", "yêu cầu"]):
+                        rec_text = ""
+                elif cls_name == "date":
+                    # Chỉ chấp nhận chuỗi chứa ngày tháng năm hợp lệ (năm từ 1990 đến 2030)
+                    m_d = re.search(r"(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})", rec_text)
+                    if m_d:
+                        fd, fm, fy = m_d.groups()
+                        if 1990 <= int(fy) <= 2030 and 1 <= int(fm) <= 12 and 1 <= int(fd) <= 31:
+                            rec_text = f"{int(fd):02d}/{int(fm):02d}/{fy}"
+                        else:
+                            rec_text = ""
+                    else:
+                        m_d = re.search(r"(?:ngày|ngay|ngly|ngáy)\s*(\d{1,2})\s*(?:tháng|thang)\s*(\d{1,2})\s*(?:năm|nam)\s*(\d{4})", rec_text, re.IGNORECASE)
+                        if m_d:
+                            fd, fm, fy = m_d.groups()
+                            if 1990 <= int(fy) <= 2030 and 1 <= int(fm) <= 12 and 1 <= int(fd) <= 31:
+                                rec_text = f"{int(fd):02d}/{int(fm):02d}/{fy}"
+                            else:
+                                rec_text = ""
+                        else:
+                            rec_text = ""
+
+                if not rec_text:
+                    continue
 
                 ents = structured_result["entities"]
-                if cls_name not in ents:
-                    ents[cls_name] = rec_text
-                elif isinstance(ents[cls_name], list):
-                    if rec_text not in ents[cls_name]:
-                        ents[cls_name].append(rec_text)
+                # Các trường đơn trị (Scalar Entity Fields): Ưu tiên giữ giá trị chuẩn nhất, không gom thành list
+                SCALAR_FIELDS = {"student_name", "student_id", "class_name", "faculty", "major", "dob", "pob", "phone", "email", "date"}
+
+                if cls_name == "student_id" and "student_id" in ents:
+                    # Nếu phát hiện thêm mã sinh viên (thường là Mã SV cũ trên đơn T05 Bảo lưu / T02 Chuyển điểm)
+                    if ents["student_id"] != rec_text and "old_student_id" not in ents:
+                        ents["old_student_id"] = rec_text
+                elif cls_name == "class_name" and "class_name" in ents:
+                    # Nếu phát hiện thêm lớp (thường là Lớp cũ trên đơn T05 Bảo lưu / T02 Chuyển điểm)
+                    if ents["class_name"] != rec_text and "old_class_name" not in ents:
+                        ents["old_class_name"] = rec_text
+                elif cls_name in SCALAR_FIELDS:
+                    if cls_name not in ents:
+                        ents[cls_name] = rec_text
+                    else:
+                        # Với student_name và major: ưu tiên box nằm ở nửa trên văn bản (Identity header y < 0.45 * H)
+                        if cls_name in ("student_name", "major") and y0 < int(h_img * 0.45):
+                            ents[cls_name] = rec_text
+                        elif cls_name == "email" and "@" in rec_text and "@" not in ents[cls_name]:
+                            ents[cls_name] = rec_text
+                        elif cls_name == "date" and y0 > int(h_img * 0.65):
+                            ents[cls_name] = rec_text
                 else:
-                    if rec_text != ents[cls_name]:
-                        ents[cls_name] = [ents[cls_name], rec_text]
+                    if cls_name not in ents:
+                        ents[cls_name] = rec_text
+                    elif isinstance(ents[cls_name], list):
+                        if rec_text not in ents[cls_name]:
+                            ents[cls_name].append(rec_text)
+                    else:
+                        if rec_text != ents[cls_name]:
+                            ents[cls_name] = [ents[cls_name], rec_text]
 
             # Course Table fields
             if cls_name in TABLE_CLASSES:
@@ -496,10 +578,13 @@ class DocumentLayoutAndOCR:
         except Exception:
             return True
 
-    def _is_valid_signature(self, box, score, min_conf=0.15):
-        """Kiểm tra tính hợp lệ của chữ ký (tỷ lệ khung hình và độ tin cậy tối thiểu)."""
-    def _is_valid_signature(self, box, score, min_conf=0.15):
-        """Kiểm tra tính hợp lệ của chữ ký (tỷ lệ khung hình và độ tin cậy tối thiểu)."""
+    def _is_valid_signature(self, box, score, min_conf=0.25, h_img=None):
+        """
+        Kiểm tra tính hợp lệ của chữ ký:
+        - Tỷ lệ khung hình và độ tin cậy tối thiểu.
+        - Chữ ký hành chính chỉ xuất hiện ở khu vực chân trang (bên dưới bảng/hướng dẫn: y >= 0.70 * H).
+          Loại bỏ 100% false positive xuất hiện chằng chịt trên khối văn bản 'Ghi chú:' ở giữa trang.
+        """
         x0, y0, x1, y1 = box
         bw, bh = x1 - x0, y1 - y0
         if bh <= 0 or bw <= 0:
@@ -507,32 +592,41 @@ class DocumentLayoutAndOCR:
         ar = bw / float(bh)
         if ar < 0.6 or ar > 6.0:
             return False
+        if h_img is not None and y0 < int(h_img * 0.70):
+            return False
         return score >= min_conf
 
     def _extract_document_date_footer(self, img_pil, structured_result):
         """
         Trích xuất ngày lập đơn chính thức ở chân trang (Footer: 'Tp.HCM, ngày ... tháng ... năm ...').
-        Tránh nhầm lẫn với các ngày thi học phần nằm bên trong bảng điểm.
+        Quét theo từng dải dòng ngang hẹp (single-line horizontal slices) để tránh lỗi dồn nhiều dòng của VietOCR.
         """
+        existing_date = structured_result["entities"].get("date")
+        if existing_date and re.match(r"^\d{2}/\d{2}/\d{4}$", str(existing_date)):
+            return
+
         w_img, h_img = img_pil.size
-        # Vùng chân trang phía dưới bảng (từ 69% đến 74% chiều cao tài liệu, lệch phải)
-        fx0 = int(w_img * 0.50)
-        fy0 = int(h_img * 0.69)
+        fx0 = int(w_img * 0.45)
         fx1 = int(w_img * 0.98)
-        fy1 = int(h_img * 0.74)
-        footer_crop = img_pil.crop((fx0, fy0, fx1, fy1))
-        f_text, _ = self._ocr_crop(footer_crop)
-        m_fdate = re.search(r"(?:ngày|ngay|ngly)\s*(\d{1,2})\s*(?:tháng|thang)\s*(\d{1,2})\s*(?:năm|nam)\s*(\d{4})", f_text, re.IGNORECASE)
-        if m_fdate:
-            fd, fm, fy = m_fdate.groups()
-            date_str = f"{int(fd):02d}/{int(fm):02d}/{fy}"
-            structured_result["entities"]["date"] = date_str
-            structured_result["raw_detections"].append({
-                "class_name": "date",
-                "confidence": 0.90,
-                "box": [fx0, fy0, fx1, fy1],
-                "text": date_str
-            })
+
+        # Quét các dải đơn lẻ từ 70% đến 76% chiều cao tài liệu (vùng ghi ngày tháng chuẩn của biểu mẫu HCMUTE)
+        for y_pct in np.arange(0.70, 0.76, 0.012):
+            fy0 = int(h_img * y_pct)
+            fy1 = int(h_img * min(0.85, y_pct + 0.025))
+            slice_crop = img_pil.crop((fx0, fy0, fx1, fy1))
+            f_text, _ = self._ocr_crop(slice_crop)
+            m_fdate = re.search(r"(?:ngày|ngay|ngly|ngáy)\s*(\d{1,2})\s*(?:tháng|thang)\s*(\d{1,2})\s*(?:năm|nam)\s*(\d{4})", f_text, re.IGNORECASE)
+            if m_fdate:
+                fd, fm, fy = m_fdate.groups()
+                date_str = f"{int(fd):02d}/{int(fm):02d}/{fy}"
+                structured_result["entities"]["date"] = date_str
+                structured_result["raw_detections"].append({
+                    "class_name": "date",
+                    "confidence": 0.90,
+                    "box": [fx0, fy0, fx1, fy1],
+                    "text": date_str
+                })
+                break
 
     def _extract_signatures_footer(self, img_pil, structured_result, table_bottom_y=None):
         """
@@ -542,7 +636,8 @@ class DocumentLayoutAndOCR:
         if cv2 is None:
             return
         w_img, h_img = img_pil.size
-        start_y = table_bottom_y + 10 if table_bottom_y else int(h_img * 0.65)
+        # Bắt đầu quét từ khu vực ký tên chính thức (bỏ qua hoàn toàn đoạn văn bản 'Ghi chú:' ở giữa trang)
+        start_y = max(int(h_img * 0.75), (table_bottom_y + int(h_img * 0.14)) if table_bottom_y else int(h_img * 0.75))
         if start_y >= h_img - 50:
             return
 
@@ -686,10 +781,13 @@ class DocumentLayoutAndOCR:
         table_crop_bw = bw[ty:ty+th, tx:tx+tw]
 
         # 3. Phân tách các đường phân chia dòng ngang (Horizontal row lines)
-        h_k_sub = cv2.getStructuringElement(cv2.MORPH_RECT, (int(tw / 20), 1))
+        h_k_sub = cv2.getStructuringElement(cv2.MORPH_RECT, (int(tw / 25), 1))
         sub_horiz = cv2.dilate(cv2.erode(table_crop_bw, h_k_sub), h_k_sub)
-        row_proj = np.sum(sub_horiz > 0, axis=1)
-        row_peaks = [i for i in range(1, len(row_proj)-1) if row_proj[i] > tw * 0.35 and row_proj[i] >= row_proj[i-1] and row_proj[i] >= row_proj[i+1]]
+        # Giãn nở nhẹ theo chiều dọc (3px) để bù trừ độ cong võng hoặc nghiêng nhẹ của ảnh camera
+        sub_horiz_dil = cv2.dilate(sub_horiz, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3)))
+        row_proj = np.sum(sub_horiz_dil > 0, axis=1)
+        row_thresh = max(100, int(tw * 0.18))
+        row_peaks = [i for i in range(1, len(row_proj)-1) if row_proj[i] > row_thresh and row_proj[i] >= row_proj[i-1] and row_proj[i] >= row_proj[i+1]]
         cleaned_row_lines = []
         for p in row_peaks:
             if not cleaned_row_lines or p - cleaned_row_lines[-1] >= 18:
@@ -700,7 +798,8 @@ class DocumentLayoutAndOCR:
         v_k_sub = cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(th / 15)))
         sub_vert = cv2.dilate(cv2.erode(table_crop_bw, v_k_sub), v_k_sub)
         col_proj = np.sum(sub_vert > 0, axis=0)
-        col_peaks = [i for i in range(1, len(col_proj)-1) if col_proj[i] > th * 0.35 and col_proj[i] >= col_proj[i-1] and col_proj[i] >= col_proj[i+1]]
+        col_thresh = max(80, int(th * 0.20))
+        col_peaks = [i for i in range(1, len(col_proj)-1) if col_proj[i] > col_thresh and col_proj[i] >= col_proj[i-1] and col_proj[i] >= col_proj[i+1]]
         col_lines = []
         for p in col_peaks:
             if not col_lines or p - col_lines[-1] > 20:
@@ -735,7 +834,7 @@ class DocumentLayoutAndOCR:
         if not detected_form or detected_form == "UNKNOWN":
             detected_form = self._detect_form_type_from_header(img_pil, structured_result)
 
-        is_chuyen_diem = any(kw in detected_form for kw in ("CHUYEN_DIEM", "T02", "T03", "T04", "T07"))
+        is_chuyen_diem = any(kw in detected_form for kw in ("CHUYEN_DIEM", "T02", "T03", "T04", "T05", "T07", "BAO_LUU"))
 
         if is_chuyen_diem:
             # Đơn chuyển điểm: Cột 1 = Tên môn cũ, Cột 2 = Mã môn cũ, Cột 3 = Số TC, Cột 4 = Điểm

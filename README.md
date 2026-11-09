@@ -87,17 +87,34 @@ TLCN/
 - opencv-python, Pillow, PyMuPDF, python-docx
 - Huấn luyện: Kaggle Notebook – GPU NVIDIA Tesla T4 x2
 
-## Cài đặt
+## Cài đặt & Khởi chạy Nhanh
 
+Chi tiết từng bước được trình bày tại file **[HUONG_DAN_CAI_DAT.md](HUONG_DAN_CAI_DAT.md)**.
+
+### 🌟 Khởi chạy 1-Click trên Windows:
+Nhấp đúp chuột vào file:
+```cmd
+run_app.bat
+```
+
+### 🛠️ Khởi chạy thủ công qua Terminal:
 ```bash
-pip install ultralytics vietocr opencv-python pillow pymupdf python-docx
+# 1. Tạo và kích hoạt môi trường ảo
+python -m venv venv
+venv\Scripts\activate
+
+# 2. Cài đặt các thư viện yêu cầu
+pip install -r requirements.txt
+
+# 3. Khởi chạy ứng dụng Web Streamlit
+streamlit run app.py
 ```
 
 ---
 
-## Tiến độ
+## Tiến độ Đề tài
 
-- [x] **Giai đoạn 1**: Thu thập & xây dựng dataset, gán nhãn 500 ảnh, publish Kaggle
-- [x] **Giai đoạn 2**: Huấn luyện YOLOv11n/YOLOv8n, đánh giá định lượng, thử nghiệm VietOCR
-- [ ] **Giai đoạn 3**: Fine-tuning VietOCR, Rule Engine đầy đủ, giải quyết Domain Shift
-- [ ] **Giai đoạn 4**: Web Demo (Streamlit/FastAPI), đánh giá toàn hệ thống
+- [x] **Giai đoạn 1**: Thu thập & xây dựng dataset, gán nhãn 500 ảnh, publish Kaggle.
+- [x] **Giai đoạn 2**: Huấn luyện YOLOv11n/YOLOv8n, đánh giá định lượng, thử nghiệm VietOCR.
+- [x] **Giai đoạn 3**: Fine-tuning VietOCR, hoàn thiện Academic Rule Engine, khắc phục suy giảm độ chính xác do Domain Shift (kéo mAP từ 6.84% lên 34.72%).
+- [x] **Giai đoạn 4**: Tối ưu hóa suy luận ONNX Runtime, hoàn thiện Web App Streamlit với cơ chế HITL (tiết kiệm 78.5% thời gian xử lý), xuất bản thảo báo cáo tiểu luận.

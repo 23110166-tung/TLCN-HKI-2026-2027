@@ -26,10 +26,15 @@ HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2/
 *.jpg
 *.jpeg
 *.webp
+!sample/*.jpg
+!sample/*.png
+!sample/*.jpeg
 real_test_vis.png
 syn_test_vis.png
 
 # ---- Temp / build ----
+scratch/
+runs/
 *.zip
 __pycache__/
 *.pyc
@@ -40,8 +45,12 @@ dist/
 build/
 .eggs/
 
-# ---- PDF exports (report files) ----
+# ---- Documents & Reports (Báo cáo nộp qua Google Docs / Sheets) ----
+*.docx
+*.xlsx
+*.pptx
 *.pdf
+!sample/*.docx
 
 # ---- Virtual environments ----
 venv/

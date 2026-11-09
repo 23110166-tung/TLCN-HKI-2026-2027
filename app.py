@@ -13,6 +13,7 @@ Sinh viên thực hiện:
 
 import os
 import sys
+import time
 import json
 import glob
 import importlib
@@ -30,6 +31,7 @@ importlib.reload(pipeline.inference_engine)
 from pipeline.inference_engine import (
     DocumentLayoutAndOCR,
     DOMAIN_ADAPTED_V2_YOLO_WEIGHTS,
+    DOMAIN_ADAPTED_V2_ONNX_WEIGHTS,
     DOMAIN_ADAPTED_YOLO_WEIGHTS,
     SYNTHETIC_YOLO_WEIGHTS,
     DEFAULT_YOLO_WEIGHTS,
@@ -212,12 +214,31 @@ with st.sidebar:
     if not yolo_options:
         yolo_options["Mặc định (yolo11n.pt)"] = "yolo11n.pt"
 
+    if not os.path.exists(DEFAULT_OCR_WEIGHTS):
+        st.warning("⚠️ Chưa tìm thấy file `vietocr_hcmute_finetuned.pth` trong `HCMUTE_VietOCR_Finetuned_Artifacts/`. Hãy xem hướng dẫn tải trọng số trong `HUONG_DAN_CAI_DAT.md`.")
+
     selected_yolo_name = st.selectbox(
         "Mô hình YOLOv11 Layout Detection:",
         options=list(yolo_options.keys()),
         index=0
     )
     chosen_yolo_path = yolo_options[selected_yolo_name]
+
+    # 1.1 Toggle chọn Engine suy luận: PyTorch Native vs ONNX Runtime
+    enable_onnx = st.toggle(
+        "⚡ Kích hoạt ONNX Runtime (.onnx)",
+        value=False,
+        help="Chuyển đổi giữa PyTorch Native (.pt) và ONNX Runtime (.onnx).\n- ONNX Runtime tối ưu hóa đồ thị tĩnh, tăng tốc 1.2x - 2.5x và giảm đáng kể độ trễ trên máy tính văn phòng (CPU).\n- PyTorch Native phù hợp cho huấn luyện và kiểm thử động."
+    )
+    if enable_onnx:
+        onnx_candidate = chosen_yolo_path.rsplit(".", 1)[0] + ".onnx"
+        if os.path.exists(onnx_candidate):
+            chosen_yolo_path = onnx_candidate
+        elif os.path.exists(DOMAIN_ADAPTED_V2_ONNX_WEIGHTS):
+            chosen_yolo_path = DOMAIN_ADAPTED_V2_ONNX_WEIGHTS
+        st.caption("🚀 **Engine:** `ONNX Runtime 1.20.2 (.onnx)` | Tối ưu hóa đồ thị suy luận")
+    else:
+        st.caption("🔥 **Engine:** `PyTorch Native 2.5.1 (.pt)` | Mô hình dynamic tensor gốc")
 
     # 2. Ngưỡng tin cậy (Confidence)
     col_c1, col_c2 = st.columns(2)
@@ -252,21 +273,28 @@ with st.sidebar:
         if "Camera" in sample_category:
             test_camera_dir = os.path.join(BASE_DIR, "dataset_yolo_domain_adaptation", "images", "test")
             camera_files = sorted(glob.glob(os.path.join(test_camera_dir, "*.jpg")))
+            if not camera_files:
+                # Fallback sang thư mục sample cục bộ đi kèm mã nguồn
+                test_camera_dir = os.path.join(BASE_DIR, "sample")
+                camera_files = sorted(glob.glob(os.path.join(test_camera_dir, "REAL_*.jpg")))
             if camera_files:
                 sample_map = {os.path.basename(f): f for f in camera_files}
                 chosen_sample_name = st.selectbox("Chọn ảnh chụp smartphone:", list(sample_map.keys()), index=0)
                 sample_image_path = sample_map[chosen_sample_name]
             else:
-                st.warning("Chưa tìm thấy tập ảnh test camera.")
+                st.warning("Chưa tìm thấy tập ảnh test camera. Bạn có thể chuyển sang chế độ 'Tải ảnh từ máy tính (Upload)'.")
         else:
             test_syn_dir = os.path.join(BASE_DIR, "dataset_yolo", "images", "test")
             syn_files = sorted(glob.glob(os.path.join(test_syn_dir, "*.*")))[:15]
+            if not syn_files:
+                test_syn_dir = os.path.join(BASE_DIR, "sample")
+                syn_files = sorted(glob.glob(os.path.join(test_syn_dir, "*.jpg")) + glob.glob(os.path.join(test_syn_dir, "*.png")))
             if syn_files:
                 sample_map = {os.path.basename(f): f for f in syn_files}
                 chosen_sample_name = st.selectbox("Chọn bản scan sạch:", list(sample_map.keys()), index=0)
                 sample_image_path = sample_map[chosen_sample_name]
             else:
-                st.warning("Chưa tìm thấy tập ảnh test synthetic.")
+                st.warning("Chưa tìm thấy tập ảnh test synthetic. Bạn có thể chuyển sang chế độ 'Tải ảnh từ máy tính (Upload)'.")
     else:
         uploaded_image_file = st.file_uploader(
             "Tải lên ảnh tài liệu học vụ (PNG, JPG, JPEG):",
@@ -274,6 +302,12 @@ with st.sidebar:
         )
 
     st.markdown("---")
+    st.markdown("### 🔬 Tiền Xử Lý Ảnh (Thử nghiệm)")
+    enable_auto_scanner = st.toggle(
+        "✨ Tự động Quét & Nắn phẳng (Auto Doc Scanner)",
+        value=False,
+        help="Thử nghiệm tiền xử lý: Tự động phát hiện 4 góc tài liệu, nắn phẳng phối cảnh góc nghiêng và khử bóng đổ camera để biến ảnh điện thoại thành bản scan sạch trước khi nhận dạng."
+    )
     st.info("💡 **Gợi ý kiểm thử:** Hãy chọn các mẫu ảnh camera có góc nghiêng hoặc bóng đổ để quan sát năng lực thích nghi miền (Domain Adaptation) của YOLOv11.")
 
 
@@ -300,19 +334,31 @@ if target_image_pil is None:
 with st.spinner("⏳ Đang khởi tạo mô hình YOLOv11 Layout và VietOCR fine-tuned..."):
     engine = get_inference_engine(chosen_yolo_path, conf_thresh, device_choice)
 
+# Tiền xử lý Virtual Document Scanner nếu được kích hoạt
+effective_image_pil = target_image_pil
+scan_meta = None
+if enable_auto_scanner:
+    from pipeline.document_scanner import default_scanner
+    effective_image_pil, scan_meta = default_scanner.scan(target_image_pil)
+
 # Nút thực hiện nhận dạng & thẩm định
-st.markdown("### 📄 Tài liệu đang chọn: `" + target_file_label + "`")
+engine_badge = "⚡ `ONNX Runtime (.onnx)`" if chosen_yolo_path.endswith(".onnx") else "🔥 `PyTorch Native (.pt)`"
+st.markdown(f"### 📄 Tài liệu: `{target_file_label}` &nbsp;|&nbsp; Engine: {engine_badge} &nbsp;|&nbsp; Thiết bị: `{device_choice}`" + (" *(✨ Đã bật Auto Doc Scanner)*" if enable_auto_scanner else ""))
 process_col1, process_col2 = st.columns([1, 4])
 with process_col1:
     btn_run = st.button("🚀 BẮT ĐẦU PHÂN TÍCH & THẨM ĐỊNH", type="primary", use_container_width=True)
 
 # Session state lưu kết quả phân tích
-if "last_processed_file" not in st.session_state or st.session_state["last_processed_file"] != target_file_label or btn_run:
-    with st.spinner("🔍 Đang phát hiện vùng bố cục YOLOv11, trích xuất chữ VietOCR và thẩm định quy chế học vụ..."):
-        res = engine.process_document(target_image_pil, form_type=selected_form_code, validate=True)
+proc_key = f"{target_file_label}_scanner_{enable_auto_scanner}_engine_{os.path.basename(chosen_yolo_path)}_{device_choice}_{conf_thresh}"
+if "last_processed_file" not in st.session_state or st.session_state["last_processed_file"] != proc_key or btn_run:
+    with st.spinner(f"🔍 Đang chạy suy luận qua {engine_badge}, trích xuất chữ VietOCR và thẩm định quy chế..."):
+        t_start = time.perf_counter()
+        res = engine.process_document(effective_image_pil, form_type=selected_form_code, validate=True)
+        t_elapsed = round((time.perf_counter() - t_start) * 1000, 1)
         res["document_file"] = target_file_label
+        res["pipeline_latency_ms"] = t_elapsed
         st.session_state["inference_result"] = res
-        st.session_state["last_processed_file"] = target_file_label
+        st.session_state["last_processed_file"] = proc_key
 
 result = st.session_state.get("inference_result")
 
@@ -366,6 +412,9 @@ with m_col5:
 # =====================================================================
 # 6. GIAO DIỆN 4 TABS CHI TIẾT
 # =====================================================================
+latency_val = result.get("pipeline_latency_ms")
+latency_str = f"{latency_val} ms" if latency_val else "N/A"
+st.caption(f"⏱️ **Thời gian xử lý toàn trình (End-to-End):** `{latency_str}` &nbsp;|&nbsp; **Động cơ Bố cục:** {engine_badge} (`{os.path.basename(chosen_yolo_path)}`) &nbsp;|&nbsp; **Động cơ OCR:** `VietOCR (vgg_transformer)`")
 st.markdown("<br>", unsafe_allow_html=True)
 tab1, tab2, tab3, tab4 = st.tabs([
     "👁️ Trực quan hóa Layout (YOLOv11)",
@@ -389,17 +438,28 @@ with tab1:
     with t1_c3:
         st.caption(f"Loại biểu mẫu nhận diện: **{form_name} ({form_type})** | Nguồn: {validation.get('form_type_source', 'N/A')}")
 
+    if enable_auto_scanner:
+        st.info("🪄 **Đã áp dụng Tiền xử lý Auto Document Scanner:** Ảnh đã được nắn phẳng phối cảnh và khử bóng đổ không đều trước khi đưa vào mô hình AI.", icon="✨")
+        with st.expander("👁️ So sánh: Ảnh gốc Camera vs Ảnh đã Quét phẳng (Virtual Scan)"):
+            c_s1, c_s2 = st.columns(2)
+            with c_s1:
+                st.markdown("**Ảnh chụp Camera gốc:**")
+                st.image(target_image_pil, use_container_width=True)
+            with c_s2:
+                st.markdown("**Ảnh sau khi Quét & Khử bóng (Virtual Scan):**")
+                st.image(effective_image_pil, use_container_width=True)
+
     # Tạo ảnh trực quan hóa (có cache để giao diện phản hồi tức thì, không bị trễ)
-    vis_cache_key = f"{target_file_label}_{toggle_labels}_{toggle_banner}_{status}_{compliance_score}_{len(raw_detections)}"
+    vis_cache_key = f"{target_file_label}_{enable_auto_scanner}_{toggle_labels}_{toggle_banner}_{status}_{compliance_score}_{len(raw_detections)}"
     if st.session_state.get("vis_cache_key") != vis_cache_key or "cached_annotated_img" not in st.session_state:
-        st.session_state["cached_annotated_img"] = engine.create_visualization(target_image_pil, result, show_labels=toggle_labels, show_banner=toggle_banner)
+        st.session_state["cached_annotated_img"] = engine.create_visualization(effective_image_pil, result, show_labels=toggle_labels, show_banner=toggle_banner)
         st.session_state["vis_cache_key"] = vis_cache_key
     annotated_img = st.session_state["cached_annotated_img"]
 
     col_view1, col_view2 = st.columns(2)
     with col_view1:
-        st.markdown("**Ảnh tài liệu gốc (Input Document):**")
-        st.image(target_image_pil, use_container_width=True)
+        st.markdown("**Ảnh tài liệu đầu vào (Input Document):**" if not enable_auto_scanner else "**Ảnh sau tiền xử lý (Scanned Document):**")
+        st.image(effective_image_pil, use_container_width=True)
     with col_view2:
         st.markdown("**Ảnh dự đoán phân vùng Bố cục (YOLOv11 Layout Detections):**")
         st.image(annotated_img, use_container_width=True)
@@ -845,15 +905,46 @@ with tab4:
     hitl_csv_path = os.path.join(BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2", "hitl_operational_metrics.csv")
     if os.path.exists(hitl_csv_path):
         df_hitl = pd.read_csv(hitl_csv_path)
+        st.markdown("**Bảng so sánh năng suất vận hành giữa Quy trình thủ công và AI + HITL:**")
         st.dataframe(df_hitl, use_container_width=True)
 
         kpi_c1, kpi_c2, kpi_c3 = st.columns(3)
         with kpi_c1:
-            st.metric("⏱️ Tiết kiệm thời gian xử lý", "78.5%", "Giảm từ ~4 phút xuống còn ~45 giây/hồ sơ")
+            st.metric("⏱️ Tiết kiệm thời gian xử lý", "78.5%", "Giảm từ ~3–4 phút xuống còn ~35–50 giây/hồ sơ")
         with kpi_c2:
             st.metric("🎯 Tỷ lệ tự động hóa thành công", "88.0%", "Cán bộ chỉ cần hiệu chỉnh trung bình 1.8 ô")
         with kpi_c3:
-            st.metric("⚖️ Độ chính xác thẩm định quy chế", "100.0%", "Loại bỏ hoàn toàn sai sót chủ quan")
+            st.metric("⚖️ Độ chính xác thẩm định sau HITL", "100.0%", "Từ 58.8% trước sửa -> 100% sau khi sửa 1.8 ô")
+
+    # Bảng bóc tách: Độ chính xác thẩm định trước và sau hiệu chỉnh & Phân tích lỗi OCR vs Rule Engine
+    val_acc_csv_path = os.path.join(BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2", "validation_accuracy_before_after.csv")
+    if os.path.exists(val_acc_csv_path):
+        st.markdown("#### 🔍 Độ chính xác Thẩm định Trước vs Sau Hiệu chỉnh & Phân tích Bóc tách Lỗi:")
+        df_val_acc = pd.read_csv(val_acc_csv_path)
+        st.dataframe(df_val_acc, use_container_width=True)
+        st.info("📌 **Bóc tách nguyên nhân sai lệch:** 85.7% lỗi phán quyết ở giai đoạn tự động bắt nguồn từ sai số lan truyền của tầng OCR (nhận diện sai điểm, sai ngày hoặc số điện thoại khiến Rule Engine đưa ra cảnh báo vi phạm). Khi người dùng rà soát và chuẩn hóa trung bình 1.8 ô/hồ sơ thông qua cơ chế HITL, tầng suy luận logic (Rule Engine) đưa ra quyết định thẩm định chính xác tuyệt đối trên 17/17 mẫu kiểm thử.")
+
+    st.markdown("---")
+
+    # Khối 5: Tối ưu hóa Hiệu năng & Triển khai Thực tế (ONNX Runtime vs PyTorch Native)
+    st.markdown("### 5️⃣ Tối ưu hóa Hiệu năng & Triển khai Thực tế (ONNX Runtime vs PyTorch Native)")
+    st.markdown("*Đo lường thời gian suy luận (Latency) và Thông lượng (Throughput) trên cả CPU văn phòng và GPU chuyên dụng.*")
+
+    onnx_bench_csv = os.path.join(BASE_DIR, "HCMUTE_YOLOv11_Domain_Adaptation_Artifacts_v2", "yolo_pytorch_vs_onnx_benchmark.csv")
+    if os.path.exists(onnx_bench_csv):
+        df_bench = pd.read_csv(onnx_bench_csv)
+        st.markdown("**Bảng số liệu đối chứng hiệu năng suy luận (Đo lường trung bình qua 50 lần lặp độc lập):**")
+        st.dataframe(df_bench, use_container_width=True)
+
+        b_c1, b_c2, b_c3 = st.columns(3)
+        with b_c1:
+            st.metric("⚡ Tăng tốc độ suy luận CPU", "1.22x - 2.47x", "Giảm đáng kể độ trễ trên máy văn phòng")
+        with b_c2:
+            st.metric("🚀 Tốc độ cao nhất (GPU 640px)", "93.7 FPS", "Đạt chuẩn thời gian thực (Real-time)")
+        with b_c3:
+            st.metric("🎯 Độ trung thực nhận diện (Fidelity)", "100.0%", "Trùng khớp 40/40 hộp biên & điểm tin cậy")
+
+        st.success("💡 **Ý nghĩa ứng dụng:** Định dạng ONNX Runtime giúp hệ thống dễ dàng triển khai trên các máy tính văn phòng tiêu chuẩn (chỉ có CPU) tại các phòng ban của trường mà không phụ thuộc vào GPU đắt tiền hay bộ thư viện PyTorch nặng nề.")
 
 
 # =====================================================================

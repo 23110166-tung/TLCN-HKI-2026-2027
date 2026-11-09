@@ -1,0 +1,30 @@
+# =====================================================================
+# HCMUTE DocAI - Dependencies & Environment Requirements
+# Tương thích: Python 3.10, 3.11 (Hệ điều hành: Windows, Linux, macOS)
+# =====================================================================
+
+# 1. Ứng dụng Giao diện Web
+streamlit>=1.35.0
+
+# 2. Xử lý Ảnh & Thị giác Máy tính
+pillow>=10.0.0
+opencv-python>=4.8.0
+
+# 3. Nền tảng Học Sâu (Deep Learning & ONNX)
+# Lưu ý: Cài đặt PyTorch phù hợp với phần cứng (CPU hoặc CUDA 11.8/12.1)
+torch>=2.2.0
+torchvision>=0.17.0
+ultralytics>=8.2.0
+onnxruntime>=1.18.0
+
+# 4. Nhận dạng Chữ Viết tiếng Việt (VietOCR)
+vietocr>=0.3.12
+
+# 5. Xử lý Dữ liệu, Đồ thị & Văn bản Học vụ
+numpy<2.0.0,>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+python-docx>=1.0.0
+openpyxl>=3.1.0
+pyyaml>=6.0
+
