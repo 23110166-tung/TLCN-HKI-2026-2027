@@ -36,7 +36,13 @@ if BASE_DIR not in sys.path:
 SCHOOL_NAME = "Trường Đại học Công nghệ Kỹ thuật Thành phố Hồ Chí Minh"
 CANONICAL_SCHOOL_NAME = SCHOOL_NAME
 HISTORICAL_SCHOOL_NAME = "Trường Đại học Sư phạm Kỹ thuật Thành phố Hồ Chí Minh"
-TRANSITION_EFFECTIVE_DATE = date(2026, 1, 1)  # Mốc văn bản chuyển đổi chính thức tên gọi trường
+# Lưu ý phân biệt 2 mốc thời gian văn bản:
+# 1. Ngày 15/05/2020 (ký hiệu NHL15052020 trên header mẫu đơn BM10-QT-PĐT-QLĐ và BM12-QT-PĐT-XCBHTBTHCNTN):
+#    Là "Ngày hiệu lực ban hành phôi biểu mẫu học vụ" theo Hệ thống Quản lý Chất lượng ISO 9001:2015 của Phòng Đào tạo.
+# 2. Ngày 01/01/2026 (TRANSITION_EFFECTIVE_DATE):
+#    Là mốc chuyển tiếp áp dụng tên gọi mới của trường trong kịch bản dữ liệu HKI 2026-2027.
+ISO_TEMPLATE_EFFECTIVE_DATE = date(2020, 5, 15)
+TRANSITION_EFFECTIVE_DATE = date(2026, 1, 1)
 
 ERROR, WARNING, INFO = "ERROR", "WARNING", "INFO"
 STATUS_VALID, STATUS_WARNING, STATUS_INVALID = "VALID", "WARNING", "INVALID"
@@ -247,7 +253,7 @@ def normalize_name(text):
 def parse_float(text):
     if text is None:
         return None
-    m = re.search(r"\d+(?:[.,]\d+)?", str(text))
+    m = re.search(r"[-+]?\d+(?:[.,]\d+)?", str(text))
     return float(m.group(0).replace(",", ".")) if m else None
 
 
@@ -278,14 +284,22 @@ def expected_grade(score_10):
 
 def split_score_tokens(scores):
     """
-    Tách danh sách box 'score' của 1 dòng (đã sắp theo trục x) thành
-    (điểm hệ 10, điểm hệ 4, điểm chữ). Bảng điểm cổng đào tạo có 3 cột theo thứ tự này.
+    Tách danh sách box 'score' của 1 dòng (đã sắp theo trục x) hoặc chuỗi điểm gộp
+    thành (điểm hệ 10, điểm hệ 4, điểm chữ). Bảng điểm cổng đào tạo có 3 cột theo thứ tự này.
     """
     s10 = s4 = letter = None
     numerics = []
+    tokens = []
     for raw in _as_list(scores):
-        tok = str(raw).strip().upper().replace(" ", "")
-        if re.fullmatch(r"[A-DFP]\+?", tok):
+        s_raw = str(raw).strip()
+        if " " in s_raw:
+            tokens.extend(s_raw.split())
+        else:
+            tokens.append(s_raw)
+
+    for raw in tokens:
+        tok = str(raw).strip().upper()
+        if re.fullmatch(r"[A-Z]\+?", tok):
             letter = tok
         else:
             val = parse_float(tok)
@@ -553,6 +567,8 @@ class AcademicRuleEngine:
         raw = _first(ctx.entities.get("school_name"))
         if not raw:
             for d in ctx.detections:
+                if d.get("class_name") in ("email", "student_id", "course_code", "degree_info", "dob", "phone"):
+                    continue
                 t = str(d.get("text", "")).strip()
                 t_clean = _strip_accents(t).lower()
                 if ("su pham ky thuat" in t_clean or "cong nghe ky thuat" in t_clean or "spkt" in t_clean or "hcmute" in t_clean):
@@ -661,8 +677,22 @@ class AcademicRuleEngine:
         return out
 
     def _check_academic_period(self, ctx):
-        texts = [str(d.get("text", "")) for d in ctx.detections]
-        texts += [str(v) for v in ctx.entities.values() if isinstance(v, str)]
+        texts = []
+        for d in ctx.detections:
+            t_str = str(d.get("text", ""))
+            # Với T06/degree_info (vd "Khóa học: 2021 - 2025"), đây là niên khóa tốt nghiệp nhiều năm, không phải Năm học 1 năm
+            if d.get("class_name") == "degree_info" and "năm học" not in _strip_accents(t_str).lower():
+                m_yr = ACADEMIC_YEAR_PATTERN.search(t_str)
+                if m_yr and 2 <= (int(m_yr.group(2)) - int(m_yr.group(1))) <= 6:
+                    continue
+            texts.append(t_str)
+        for k, v in ctx.entities.items():
+            if isinstance(v, str):
+                if k == "degree_info" and "năm học" not in _strip_accents(v).lower():
+                    m_yr = ACADEMIC_YEAR_PATTERN.search(v)
+                    if m_yr and 2 <= (int(m_yr.group(2)) - int(m_yr.group(1))) <= 6:
+                        continue
+                texts.append(v)
         out, seen_years, seen_sems = [], set(), set()
         for t in texts:
             for y1, y2 in ACADEMIC_YEAR_PATTERN.findall(t):
@@ -717,9 +747,10 @@ class AcademicRuleEngine:
             return []
         have = int(ctx.verification.get("signature_count", 0))
         ok = have >= need
-        return [RuleResult("R32", "Đủ chữ ký theo loại mẫu", ERROR, ok,
-                           f"Phát hiện {have}/{need} chữ ký ({ctx.form_spec['signers']})." +
-                           ("" if ok else f" Thiếu {need - have} chữ ký."),
+        return [RuleResult("R32", "Phát hiện dấu hiệu chữ ký theo loại mẫu", ERROR, ok,
+                           f"Phát hiện {have}/{need} vị trí có dấu hiệu nét mực chữ ký ({ctx.form_spec['signers']})." +
+                           ("" if ok else f" Thiếu {need - have} chữ ký.") +
+                           " (Lưu ý: Tầng thị giác máy tính chỉ phát hiện dấu hiệu có/không có nét mực chữ ký, chưa bao gồm kiểm chứng danh tính người ký).",
                            "signature", have, need)]
 
     def _check_stamps(self, ctx):
@@ -879,10 +910,44 @@ class AcademicRuleEngine:
         total_w = sum(2 if r.severity == ERROR else 1 for r in scored) or 1
         pass_w = sum(2 if r.severity == ERROR else 1 for r in scored if r.passed)
 
+        # Cơ chế Chuyển kiểm tra thủ công & Phân loại vi phạm (Manual Review Trigger)
+        manual_review_reasons = []
+        review_categories = set()
+        has_missing_mandatory = False
+        has_data_conflict = False
+        has_out_of_bound = False
+
+        for r in failed_err + failed_warn:
+            msg = f"[{r.rule_id} - {r.severity}] {r.message}"
+            manual_review_reasons.append(msg)
+
+            # Phân loại nhóm nguyên nhân
+            if r.rule_id in ("R30", "R31", "R32", "R33"):
+                review_categories.add("MISSING_MANDATORY_FIELD")
+                has_missing_mandatory = True
+            elif r.rule_id in ("R46", "R44"):
+                review_categories.add("OUT_OF_BOUND_VALUE")
+                has_out_of_bound = True
+            elif r.rule_id in ("R13", "R14", "R16", "R18", "R43", "R49", "R4A", "R4B", "R25", "R26"):
+                review_categories.add("DATA_CONFLICT")
+                has_data_conflict = True
+            elif r.rule_id in ("R1B",):
+                review_categories.add("HISTORICAL_SCHOOL_TEMPORAL_CHECK")
+            elif r.rule_id in ("R50",):
+                review_categories.add("LOW_OCR_CONFIDENCE")
+            elif r.rule_id in ("R10", "R23", "R27", "R40", "R47", "R48"):
+                review_categories.add("REGULATION_VIOLATION")
+            else:
+                review_categories.add("GENERAL_WARNING")
+
+        needs_manual_review = (status != STATUS_VALID)
+        # Tuyệt đối không tự động tiếp nhận hồ sơ khi có lỗi hoặc cảnh báo
+        is_acceptable_automatically = (status == STATUS_VALID and len(failed_err) == 0 and len(failed_warn) == 0)
+
         status_text = {
-            STATUS_VALID: "Hồ sơ hợp lệ – đủ điều kiện tiếp nhận.",
-            STATUS_WARNING: "Hồ sơ có điểm nghi vấn – cần cán bộ kiểm tra thủ công.",
-            STATUS_INVALID: "Hồ sơ không hợp lệ – vi phạm quy chế/thiếu thành phần bắt buộc.",
+            STATUS_VALID: "Hồ sơ hợp lệ – đủ điều kiện tự động tiếp nhận.",
+            STATUS_WARNING: "Hồ sơ có điểm nghi vấn / thiếu mốc đối soát – chuyển sang kiểm tra thủ công (HITL).",
+            STATUS_INVALID: "Hồ sơ không hợp lệ – vi phạm quy chế hoặc thiếu thành phần bắt buộc (chuyển kiểm tra thủ công).",
         }[status]
 
         return {
@@ -894,6 +959,16 @@ class AcademicRuleEngine:
             "status": status,
             "status_text": status_text,
             "compliance_score": round(100.0 * pass_w / total_w, 1),
+            "needs_manual_review": needs_manual_review,
+            "is_acceptable_automatically": is_acceptable_automatically,
+            "manual_review_reasons": manual_review_reasons,
+            "review_categories": sorted(review_categories) if review_categories else ["NONE"],
+            "security_audit": {
+                "has_missing_mandatory": has_missing_mandatory,
+                "has_data_conflict": has_data_conflict,
+                "has_out_of_bound": has_out_of_bound,
+                "zero_false_acceptance_guarantee": is_acceptable_automatically and not (has_missing_mandatory or has_data_conflict or has_out_of_bound)
+            },
             "summary": {
                 "total_rules": len(rules),
                 "passed": sum(1 for r in rules if r.passed),
